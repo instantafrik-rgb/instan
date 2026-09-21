@@ -1,0 +1,6 @@
+{
+  "name": "Nantor Sourcing App",
+  "description": "Application professionnelle de sourcing et gestion commerciale Chine - Togo : clients, sourcing, fournisseurs, devis, commandes, logistique, paiements, factures et rentabilité.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

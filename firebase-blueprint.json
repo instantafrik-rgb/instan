@@ -1,0 +1,143 @@
+{
+  "entities": {
+    "Client": {
+      "title": "Client",
+      "description": "Client profile in Nantor Sourcing",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nom": { "type": "string" },
+        "telephone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "ville": { "type": "string" },
+        "quartier": { "type": "string" },
+        "email": { "type": "string" },
+        "notes": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "nom", "telephone"]
+    },
+    "Commande": {
+      "title": "Commande",
+      "description": "Importation order from China to Togo",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "numero": { "type": "string" },
+        "clientId": { "type": "string" },
+        "statut": { "type": "string" },
+        "montantTotal": { "type": "number" },
+        "acompte": { "type": "number" },
+        "solde": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "numero", "clientId", "statut"]
+    },
+    "Devis": {
+      "title": "Devis",
+      "description": "Sourcing quotation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "numero": { "type": "string" },
+        "clientId": { "type": "string" },
+        "total": { "type": "number" },
+        "statut": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "numero", "clientId"]
+    },
+    "Paiement": {
+      "title": "Paiement",
+      "description": "Payment record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "commandeId": { "type": "string" },
+        "montant": { "type": "number" },
+        "mode": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "commandeId", "montant"]
+    },
+    "Fournisseur": {
+      "title": "Fournisseur",
+      "description": "Chinese supplier contact",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "nom": { "type": "string" },
+        "telephone": { "type": "string" },
+        "wechat": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "nom"]
+    },
+    "Sourcing": {
+      "title": "Sourcing",
+      "description": "Product sourcing item",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "produit": { "type": "string" },
+        "statut": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "produit"]
+    },
+    "Rentabilite": {
+      "title": "Rentabilite",
+      "description": "Private profitability analysis",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "commandeId": { "type": "string" },
+        "beneficeNet": { "type": "number" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "commandeId"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/clients/{clientId}": {
+      "schema": "Client",
+      "description": "Clients of the authenticated user"
+    },
+    "/users/{userId}/commandes/{commandeId}": {
+      "schema": "Commande",
+      "description": "Orders of the authenticated user"
+    },
+    "/users/{userId}/devis/{devisId}": {
+      "schema": "Devis",
+      "description": "Quotations of the authenticated user"
+    },
+    "/users/{userId}/paiements/{paiementId}": {
+      "schema": "Paiement",
+      "description": "Payments of the authenticated user"
+    },
+    "/users/{userId}/factures/{factureId}": {
+      "schema": "Commande",
+      "description": "Invoices of the authenticated user"
+    },
+    "/users/{userId}/fournisseurs/{fournisseurId}": {
+      "schema": "Fournisseur",
+      "description": "Suppliers of the authenticated user"
+    },
+    "/users/{userId}/sourcing/{sourcingId}": {
+      "schema": "Sourcing",
+      "description": "Sourcing records of the authenticated user"
+    },
+    "/users/{userId}/rentabilites/{rentabiliteId}": {
+      "schema": "Rentabilite",
+      "description": "Private financial data of the authenticated user"
+    },
+    "/users/{userId}/historique/{historiqueId}": {
+      "schema": "Client",
+      "description": "Audit trail entries"
+    },
+    "/users/{userId}/meta/{docId}": {
+      "schema": "Client",
+      "description": "Sync metadata and device settings"
+    }
+  }
+}
