@@ -41,9 +41,11 @@ export type FactureStatut =
   | 'Envoyée'
   | 'Partiellement payée'
   | 'Payée'
+  | 'En retard'
   | 'Annulée'
   | 'PAYÉ'
-  | 'PARTIELLEMENT PAYÉ';
+  | 'PARTIELLEMENT PAYÉ'
+  | 'Non payé';
 
 export type FactureSource = 'Devis' | 'Commande' | 'Facture directe';
 
@@ -242,6 +244,10 @@ export interface Facture {
   isArchived?: boolean;
   updatedAt?: string;
   deviceOrigin?: 'windows' | 'android';
+  payeeManuellement?: boolean;
+  dateReglementFinal?: string;
+  dateEcheance?: string;
+  notesReglement?: string;
 }
 
 export interface Rentabilite {
@@ -352,7 +358,7 @@ export interface Parametres {
   cloudSyncUserEmail?: string;
 }
 
-export type SyncState = 'synced' | 'syncing' | 'offline' | 'error';
+export type SyncState = 'synced' | 'pending' | 'syncing' | 'error' | 'offline';
 
 export interface SyncStats {
   clients: number;
@@ -364,7 +370,10 @@ export interface SyncStats {
   sourcing: number;
   pendingOfflineQueue: number;
   lastSyncTime?: string;
-  lastError?: string;
+  lastError?: string | null;
+  userId?: string | null;
+  userEmail?: string | null;
+  isGoogleConnected?: boolean;
 }
 
 export interface OfflineQueueItem {

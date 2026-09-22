@@ -25,6 +25,12 @@ html.dark, html.theme-dark-tech {
 }
 
 /* Custom scrollbar and smooth transitions */
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

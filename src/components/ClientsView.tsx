@@ -9,14 +9,18 @@ import {
   ChevronRight,
   Smartphone,
   UserPlus,
+  Download,
+  Archive,
+  FileSpreadsheet,
 } from 'lucide-react';
-import { Client, Devis, Commande } from '../types';
+import { Client, Devis, Commande, Facture, TabType } from '../types';
 import { useApp } from '../context/AppContext';
 import { ClientDetailModal } from './ClientDetailModal';
 import { ClientFormModal } from './ClientFormModal';
 import { AddClientChoiceModal } from './AddClientChoiceModal';
 import { SelectPhoneModal } from './SelectPhoneModal';
 import { DuplicateClientModal } from './DuplicateClientModal';
+import { formatCurrency } from '../utils/formatters';
 import {
   isContactPickerSupported,
   pickPhoneContact,
@@ -28,19 +32,24 @@ interface ClientsViewProps {
   onNewDevis: (client?: Client) => void;
   onSelectDevis: (devis: Devis) => void;
   onSelectCommande: (commande: Commande) => void;
+  onSelectFacture?: (facture: Facture) => void;
+  onNavigateToTab?: (tab: TabType) => void;
 }
 
 export const ClientsView: React.FC<ClientsViewProps> = ({
   onNewDevis,
   onSelectDevis,
   onSelectCommande,
+  onSelectFacture,
+  onNavigateToTab,
 }) => {
-  const { clients, addClient, updateClient, showToast } = useApp();
+  const { clients, addClient, updateClient, commandes, exportCSV, showToast, parametres } = useApp();
 
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClient, setSelectedClient] = useState<Client | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingClient, setEditingClient] = useState<Client | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<'actifs' | 'all' | 'archives'>('actifs');
 
   // Modal choice: Manual or Phone contacts
   const [isChoiceModalOpen, setIsChoiceModalOpen] = useState(false);
@@ -67,8 +76,14 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
     client: Client;
   } | null>(null);
 
-  // Filtered clients list
+  // Filtered clients list with active/archived state
+  const activeCount = clients.filter((c) => !c.isArchived).length;
+  const archivedCount = clients.filter((c) => !!c.isArchived).length;
+
   const filteredClients = clients.filter((c) => {
+    if (archiveFilter === 'actifs' && c.isArchived) return false;
+    if (archiveFilter === 'archives' && !c.isArchived) return false;
+
     const q = searchTerm.toLowerCase();
     const prenomMatch = c.prenom ? c.prenom.toLowerCase().includes(q) : false;
     return (
@@ -80,6 +95,27 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
       (c.quartier && c.quartier.toLowerCase().includes(q))
     );
   });
+
+  const getClientSummary = (clientId: string) => {
+    const cmds = commandes.filter((c) => c.clientId === clientId && !c.isArchived);
+    const total = cmds.reduce((acc, c) => acc + (c.montantTotal || 0), 0);
+    const paye = cmds.reduce((acc, c) => acc + (c.montantPaye || 0), 0);
+    const solde = Math.max(0, total - paye);
+    return {
+      nbCommandes: cmds.length,
+      total,
+      solde,
+    };
+  };
+
+  const handleExportCSV = () => {
+    try {
+      exportCSV('clients');
+      showToast('✓ Répertoire des clients exporté en CSV', 'success');
+    } catch {
+      showToast("Erreur lors de l'export CSV", 'error');
+    }
+  };
 
   // Option 1: Manual client creation
   const handleSelectManual = () => {
@@ -243,12 +279,12 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
             <span>Répertoire Clients ({clients.length})</span>
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Contacts, historique des devis, commandes et synchronisation Cloud V4
+            Contacts, historique 360°, suivi des encaissements et synchronisation Cloud
           </p>
         </div>
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 self-start sm:self-auto">
+        <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
           {/* Main "+ Ajouter un client" button opening the 2 options */}
           <button
             onClick={() => setIsChoiceModalOpen(true)}
@@ -267,26 +303,76 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
             <Smartphone className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
             <span className="hidden sm:inline">📱 Contacts</span>
           </button>
+
+          {/* Quick Export CSV */}
+          <button
+            onClick={handleExportCSV}
+            className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-all active:scale-95 shrink-0 cursor-pointer"
+            title="Exporter le répertoire clients en fichier CSV"
+          >
+            <Download className="w-4 h-4 text-slate-500" />
+            <span className="hidden sm:inline">CSV</span>
+          </button>
         </div>
       </div>
 
-      {/* Search Bar */}
-      <div className="relative">
-        <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Rechercher par nom, prénom, téléphone, ville ou quartier..."
-          className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#112238] border border-slate-200 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500 shadow-xs"
-        />
+      {/* Filter Tabs & Search Bar */}
+      <div className="space-y-2">
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 no-scrollbar">
+          <button
+            onClick={() => setArchiveFilter('actifs')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer ${
+              archiveFilter === 'actifs'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-white dark:bg-[#112238] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            Actifs ({activeCount})
+          </button>
+          <button
+            onClick={() => setArchiveFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer ${
+              archiveFilter === 'all'
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-white dark:bg-[#112238] border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'
+            }`}
+          >
+            Tous ({clients.length})
+          </button>
+          {archivedCount > 0 && (
+            <button
+              onClick={() => setArchiveFilter('archives')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all shrink-0 cursor-pointer flex items-center gap-1 ${
+                archiveFilter === 'archives'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-white dark:bg-[#112238] border border-slate-200 dark:border-slate-800 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30'
+              }`}
+            >
+              <Archive className="w-3.5 h-3.5" />
+              Archivés ({archivedCount})
+            </button>
+          )}
+        </div>
+
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Rechercher par nom, prénom, téléphone, ville ou quartier..."
+            className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-[#112238] border border-slate-200 dark:border-slate-800 rounded-xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-blue-500 shadow-xs"
+          />
+        </div>
       </div>
 
       {/* Clients List */}
       {filteredClients.length === 0 ? (
         <div className="text-center py-12 bg-white dark:bg-[#112238] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-3">
-          <Users className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+            <Users className="w-6 h-6" />
+          </div>
+          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
             {searchTerm ? 'Aucun client ne correspond à votre recherche' : 'Aucun client enregistré'}
           </p>
           <p className="text-xs text-slate-500 dark:text-slate-400 max-w-md mx-auto">
@@ -295,14 +381,14 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
           <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
             <button
               onClick={() => setIsChoiceModalOpen(true)}
-              className="px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-md cursor-pointer"
+              className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
             >
               <Plus className="w-4 h-4" />
               Ajouter un client
             </button>
             <button
               onClick={handleSelectImportPhone}
-              className="px-4 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-md cursor-pointer"
+              className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
             >
               <Smartphone className="w-4 h-4" />
               📱 Importer depuis mes contacts
@@ -311,62 +397,90 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {filteredClients.map((client) => (
-            <div
-              key={client.id}
-              onClick={() => setSelectedClient(client)}
-              className="bg-white dark:bg-[#112238] rounded-xl p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex flex-col justify-between group"
-            >
-              <div>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-sm flex items-center justify-center shrink-0">
-                      {client.nom.slice(0, 2).toUpperCase()}
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
-                        {client.nom}
-                      </h3>
-                      <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400">
-                        <MapPin className="w-3 h-3 text-slate-400" />
-                        <span>{client.ville || 'Lomé'}{client.quartier ? `, ${client.quartier}` : ''}</span>
+          {filteredClients.map((client) => {
+            const stats = getClientSummary(client.id);
+            return (
+              <div
+                key={client.id}
+                onClick={() => setSelectedClient(client)}
+                className="bg-white dark:bg-[#112238] rounded-xl p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex flex-col justify-between group"
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-10 h-10 rounded-xl bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 font-bold text-sm flex items-center justify-center shrink-0">
+                        {client.nom.slice(0, 2).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
+                            {client.nom} {client.prenom || ''}
+                          </h3>
+                          {client.isArchived && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/20">
+                              Archivé
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                          <span className="truncate">{client.ville || 'Lomé'}{client.quartier ? `, ${client.quartier}` : ''}</span>
+                        </div>
                       </div>
                     </div>
+                    <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-colors shrink-0 mt-1" />
                   </div>
-                  <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-blue-600 transition-colors shrink-0 mt-1" />
-                </div>
 
-                <div className="mt-3 pt-3 border-t border-slate-100 dark:border-slate-800/80 text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between">
-                  <span className="font-mono text-[11px]">{client.telephone}</span>
-                  {client.notes && (
-                    <span className="text-[10px] text-slate-400 truncate max-w-[140px] italic">
-                      {client.notes}
-                    </span>
+                  {/* Financial & orders summary */}
+                  {stats.nbCommandes > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-slate-100 dark:border-slate-800/80 flex items-center justify-between text-xs">
+                      <span className="text-slate-500 dark:text-slate-400 text-[11px]">
+                        {stats.nbCommandes} commande{stats.nbCommandes > 1 ? 's' : ''}
+                      </span>
+                      {stats.solde > 0 ? (
+                        <span className="font-semibold text-rose-600 dark:text-rose-400 text-[11px] bg-rose-50 dark:bg-rose-950/40 px-2 py-0.5 rounded-md">
+                          Reste : {formatCurrency(stats.solde, parametres.devise)}
+                        </span>
+                      ) : (
+                        <span className="font-semibold text-emerald-600 dark:text-emerald-400 text-[11px] bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-md">
+                          ✓ Tout soldé
+                        </span>
+                      )}
+                    </div>
                   )}
+
+                  <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800/80 text-xs text-slate-600 dark:text-slate-300 flex items-center justify-between">
+                    <span className="font-mono text-[11px]">{client.telephone}</span>
+                    {client.notes && (
+                      <span className="text-[11px] text-slate-400 truncate max-w-[140px] italic">
+                        {client.notes}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Direct Action buttons */}
+                <div className="mt-3 flex gap-2" onClick={(e) => e.stopPropagation()}>
+                  <a
+                    href={`tel:${client.telephone}`}
+                    className="flex-1 py-1.5 px-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 active:scale-95 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <Phone className="w-3.5 h-3.5 text-emerald-500" />
+                    Appel
+                  </a>
+                  <a
+                    href={`https://wa.me/${cleanPhoneForWa(client.whatsapp || client.telephone)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex-1 py-1.5 px-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 active:scale-95 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                  >
+                    <MessageCircle className="w-3.5 h-3.5 text-emerald-500" />
+                    WhatsApp
+                  </a>
                 </div>
               </div>
-
-              {/* Direct Action buttons */}
-              <div className="mt-3 flex gap-2" onClick={(e) => e.stopPropagation()}>
-                <a
-                  href={`tel:${client.telephone}`}
-                  className="flex-1 py-1 px-2 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
-                >
-                  <Phone className="w-3 h-3 text-emerald-500" />
-                  Appel
-                </a>
-                <a
-                  href={`https://wa.me/${cleanPhoneForWa(client.whatsapp || client.telephone)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="flex-1 py-1 px-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 text-[11px] font-semibold flex items-center justify-center gap-1 transition-colors"
-                >
-                  <MessageCircle className="w-3 h-3 text-emerald-500" />
-                  WhatsApp
-                </a>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -415,7 +529,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
         />
       )}
 
-      {/* Client Detail Modal */}
+      {/* Client Detail Modal (360° View) */}
       <ClientDetailModal
         client={selectedClient}
         onClose={() => setSelectedClient(null)}
@@ -429,6 +543,8 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
         }}
         onSelectDevis={onSelectDevis}
         onSelectCommande={onSelectCommande}
+        onSelectFacture={onSelectFacture}
+        onNavigateToTab={onNavigateToTab}
       />
 
       {/* Client Add/Edit Modal */}

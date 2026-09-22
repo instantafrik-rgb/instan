@@ -5,7 +5,9 @@ import {
   Devis,
   Commande,
   Paiement,
+  ModePaiement,
   Facture,
+  FactureStatut,
   Rentabilite,
   Parametres,
   ArticleLigne,
@@ -29,7 +31,18 @@ import {
   getOfflineQueue,
   getOrCreateDeviceId,
   detectDeviceType,
+  subscribeToUserCollections,
+  mergeCollectionEntities,
 } from '../utils/cloudSync';
+import {
+  auth,
+  googleSignIn,
+  googleLogout,
+  getCurrentGoogleUser,
+  onAuthUserChanged,
+  ensureAuthenticated,
+} from '../utils/googleAuth';
+import type { User } from 'firebase/auth';
 import {
   initialClients,
   initialDevis,
@@ -125,7 +138,9 @@ interface AppContextType {
 
   // CRUD Paiements
   addPaiement: (paiementData: Omit<Paiement, 'id' | 'numero'>) => Paiement;
+  updatePaiement: (paiement: Paiement) => void;
   deletePaiement: (paiementId: string) => void;
+  getFacturePaiements: (factureId: string) => Paiement[];
 
   // CRUD Factures V4 (Flexible: depuis Devis, Commande sans devis, ou Directe)
   generateFactureFromCommande: (commandeId: string) => Facture | null;
@@ -136,6 +151,22 @@ interface AppContextType {
   unarchiveFacture: (factureId: string) => void;
   restoreFacture: (factureId: string) => void;
   deleteFacture: (factureId: string) => void;
+  marquerFacturePayeeManuellement: (
+    factureId: string,
+    details?: {
+      montant?: number;
+      date?: string;
+      modePaiement?: ModePaiement;
+      reference?: string;
+      note?: string;
+    }
+  ) => Paiement | null;
+  updateFactureStatutManuel: (
+    factureId: string,
+    nouveauStatut: FactureStatut,
+    forcePayee?: boolean,
+    raison?: string
+  ) => void;
 
   // Cloud Synchronization V4 (Windows <-> Android)
   syncState: SyncState;
@@ -144,6 +175,9 @@ interface AppContextType {
   uploadAllToCloud: () => Promise<{ success: boolean; message: string }>;
   downloadAllFromCloud: () => Promise<{ success: boolean; message: string }>;
   clearOfflinePendingQueue: () => void;
+  currentAuthUser: User | null;
+  signInWithGoogle: () => Promise<void>;
+  signOutGoogle: () => Promise<void>;
 
   // Rentabilité
   saveRentabilite: (commandeId: string, prixAchatChine: number, fraisReels: number) => Rentabilite;
@@ -771,30 +805,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       dateCreation: new Date().toISOString(),
     };
     setClients((prev) => [newClient, ...prev]);
+    syncEntityToCloud('clients', 'create', newClient.id, newClient);
     logEvent('Création de client', newClient.nom, 'Client', `Tél : ${newClient.telephone} - Ville : ${newClient.ville}`);
     return newClient;
   };
 
   const updateClient = (updated: Client) => {
     setClients((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    syncEntityToCloud('clients', 'update', updated.id, updated);
     logEvent('Modification de client', updated.nom, 'Client', `Informations mises à jour`);
   };
 
   const archiveClient = (clientId: string) => {
     const c = clients.find((item) => item.id === clientId);
     setClients((prev) => prev.map((item) => (item.id === clientId ? { ...item, isArchived: true } : item)));
-    if (c) logEvent('Archivage de client', c.nom, 'Client');
+    if (c) {
+      syncEntityToCloud('clients', 'update', clientId, { ...c, isArchived: true });
+      logEvent('Archivage de client', c.nom, 'Client');
+    }
   };
 
   const unarchiveClient = (clientId: string) => {
     const c = clients.find((item) => item.id === clientId);
     setClients((prev) => prev.map((item) => (item.id === clientId ? { ...item, isArchived: false } : item)));
-    if (c) logEvent('Restauration de client', c.nom, 'Client');
+    if (c) {
+      syncEntityToCloud('clients', 'update', clientId, { ...c, isArchived: false });
+      logEvent('Restauration de client', c.nom, 'Client');
+    }
   };
 
   const deleteClient = (clientId: string): boolean => {
     const c = clients.find((item) => item.id === clientId);
     setClients((prev) => prev.filter((item) => item.id !== clientId));
+    syncEntityToCloud('clients', 'delete', clientId, null);
     if (c) logEvent('Suppression définitive de client', c.nom, 'Client');
     return true;
   };
@@ -807,30 +850,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       dateCreation: new Date().toISOString(),
     };
     setFournisseurs((prev) => [newF, ...prev]);
+    syncEntityToCloud('fournisseurs', 'create', newF.id, newF);
     logEvent('Création de fournisseur', newF.nom, 'Fournisseur', `Statut : ${newF.statut}`);
     return newF;
   };
 
   const updateFournisseur = (f: Fournisseur) => {
     setFournisseurs((prev) => prev.map((item) => (item.id === f.id ? f : item)));
+    syncEntityToCloud('fournisseurs', 'update', f.id, f);
     logEvent('Modification de fournisseur', f.nom, 'Fournisseur');
   };
 
   const archiveFournisseur = (id: string) => {
     const f = fournisseurs.find((item) => item.id === id);
     setFournisseurs((prev) => prev.map((item) => (item.id === id ? { ...item, isArchived: true } : item)));
-    if (f) logEvent('Archivage de fournisseur', f.nom, 'Fournisseur');
+    if (f) {
+      syncEntityToCloud('fournisseurs', 'update', id, { ...f, isArchived: true });
+      logEvent('Archivage de fournisseur', f.nom, 'Fournisseur');
+    }
   };
 
   const unarchiveFournisseur = (id: string) => {
     const f = fournisseurs.find((item) => item.id === id);
     setFournisseurs((prev) => prev.map((item) => (item.id === id ? { ...item, isArchived: false } : item)));
-    if (f) logEvent('Restauration de fournisseur', f.nom, 'Fournisseur');
+    if (f) {
+      syncEntityToCloud('fournisseurs', 'update', id, { ...f, isArchived: false });
+      logEvent('Restauration de fournisseur', f.nom, 'Fournisseur');
+    }
   };
 
   const deleteFournisseur = (id: string) => {
     const f = fournisseurs.find((item) => item.id === id);
     setFournisseurs((prev) => prev.filter((item) => item.id !== id));
+    syncEntityToCloud('fournisseurs', 'delete', id, null);
     if (f) logEvent('Suppression définitive de fournisseur', f.nom, 'Fournisseur');
   };
 
@@ -845,30 +897,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       dateCreation: new Date().toISOString(),
     };
     setSourcingList((prev) => [newS, ...prev]);
+    syncEntityToCloud('sourcing', 'create', newS.id, newS);
     logEvent('Création de demande de sourcing', `${newS.numero} - ${newS.produitRecherche}`, 'Sourcing');
     return newS;
   };
 
   const updateSourcing = (s: Sourcing) => {
     setSourcingList((prev) => prev.map((item) => (item.id === s.id ? s : item)));
+    syncEntityToCloud('sourcing', 'update', s.id, s);
     logEvent('Modification de sourcing', `${s.numero} (${s.statut})`, 'Sourcing');
   };
 
   const archiveSourcing = (id: string) => {
     const s = sourcingList.find((item) => item.id === id);
     setSourcingList((prev) => prev.map((item) => (item.id === id ? { ...item, isArchived: true } : item)));
-    if (s) logEvent('Archivage de sourcing', s.numero, 'Sourcing');
+    if (s) {
+      syncEntityToCloud('sourcing', 'update', id, { ...s, isArchived: true });
+      logEvent('Archivage de sourcing', s.numero, 'Sourcing');
+    }
   };
 
   const unarchiveSourcing = (id: string) => {
     const s = sourcingList.find((item) => item.id === id);
     setSourcingList((prev) => prev.map((item) => (item.id === id ? { ...item, isArchived: false } : item)));
-    if (s) logEvent('Restauration de sourcing', s.numero, 'Sourcing');
+    if (s) {
+      syncEntityToCloud('sourcing', 'update', id, { ...s, isArchived: false });
+      logEvent('Restauration de sourcing', s.numero, 'Sourcing');
+    }
   };
 
   const deleteSourcing = (id: string) => {
     const s = sourcingList.find((item) => item.id === id);
     setSourcingList((prev) => prev.filter((item) => item.id !== id));
+    syncEntityToCloud('sourcing', 'delete', id, null);
     if (s) logEvent('Suppression définitive de sourcing', s.numero, 'Sourcing');
   };
 
@@ -921,13 +982,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setDevis((prev) => [newDevis, ...prev]);
+    syncEntityToCloud('devis', 'create', newDevis.id, newDevis);
 
     // Update sourcing status
-    updateSourcing({
+    const updatedS = {
       ...s,
-      statut: 'Transformé en devis',
+      statut: 'Transformé en devis' as const,
       devisId: newDevis.id,
-    });
+    };
+    updateSourcing(updatedS);
 
     logEvent('Transformation de sourcing en devis', `${s.numero} → ${newDevis.numero}`, 'Sourcing');
     return newDevis;
@@ -944,30 +1007,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       numero,
     };
     setDevis((prev) => [newDevis, ...prev]);
+    syncEntityToCloud('devis', 'create', newDevis.id, newDevis);
     logEvent('Création de devis', newDevis.numero, 'Devis', `Total : ${newDevis.total.toLocaleString('fr-FR')} FCFA`);
     return newDevis;
   };
 
   const updateDevis = (updated: Devis) => {
     setDevis((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+    syncEntityToCloud('devis', 'update', updated.id, updated);
     logEvent('Modification de devis', updated.numero, 'Devis');
   };
 
   const archiveDevis = (devisId: string) => {
     const d = devis.find((item) => item.id === devisId);
     setDevis((prev) => prev.map((item) => (item.id === devisId ? { ...item, isArchived: true } : item)));
-    if (d) logEvent('Archivage de devis', d.numero, 'Devis');
+    if (d) {
+      syncEntityToCloud('devis', 'update', devisId, { ...d, isArchived: true });
+      logEvent('Archivage de devis', d.numero, 'Devis');
+    }
   };
 
   const unarchiveDevis = (devisId: string) => {
     const d = devis.find((item) => item.id === devisId);
     setDevis((prev) => prev.map((item) => (item.id === devisId ? { ...item, isArchived: false } : item)));
-    if (d) logEvent('Restauration de devis', d.numero, 'Devis');
+    if (d) {
+      syncEntityToCloud('devis', 'update', devisId, { ...d, isArchived: false });
+      logEvent('Restauration de devis', d.numero, 'Devis');
+    }
   };
 
   const deleteDevis = (devisId: string) => {
     const d = devis.find((item) => item.id === devisId);
     setDevis((prev) => prev.filter((item) => item.id !== devisId));
+    syncEntityToCloud('devis', 'delete', devisId, null);
     if (d) logEvent('Suppression définitive de devis', d.numero, 'Devis');
   };
 
@@ -1019,32 +1091,37 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setCommandes((prev) => [newCommande, ...prev]);
+    syncEntityToCloud('commandes', 'create', newCommande.id, newCommande);
 
     // Update Devis status
+    const updatedDevis = { ...targetDevis, statut: 'Converti en commande' as const };
     setDevis((prev) =>
-      prev.map((d) => (d.id === targetDevis.id ? { ...d, statut: 'Converti en commande' } : d))
+      prev.map((d) => (d.id === targetDevis.id ? updatedDevis : d))
     );
+    syncEntityToCloud('devis', 'update', targetDevis.id, updatedDevis);
 
     // Initialize estimated rentabilité
     const coutEstime = Math.round(newCommande.montantTotal * 0.7);
+    const initialRent: Rentabilite = {
+      commandeId: newCommande.id,
+      prixAchatChine: Math.round(coutEstime * 0.75),
+      livraisonChine: targetDevis.fraisLivraisonChine,
+      transportInternational: 10000,
+      douane: 5000,
+      autresFrais: 2000,
+      fraisReels: targetDevis.fraisLivraisonChine + 17000,
+      prixFacture: newCommande.montantTotal,
+      coutReel: coutEstime,
+      benefice: newCommande.montantTotal - coutEstime,
+      marge: Number((((newCommande.montantTotal - coutEstime) / newCommande.montantTotal) * 100).toFixed(2)),
+      coutEstime,
+      beneficePrevu: newCommande.montantTotal - coutEstime,
+    };
     setRentabilites((prev) => ({
       ...prev,
-      [newCommande.id]: {
-        commandeId: newCommande.id,
-        prixAchatChine: Math.round(coutEstime * 0.75),
-        livraisonChine: targetDevis.fraisLivraisonChine,
-        transportInternational: 10000,
-        douane: 5000,
-        autresFrais: 2000,
-        fraisReels: targetDevis.fraisLivraisonChine + 17000,
-        prixFacture: newCommande.montantTotal,
-        coutReel: coutEstime,
-        benefice: newCommande.montantTotal - coutEstime,
-        marge: Number((((newCommande.montantTotal - coutEstime) / newCommande.montantTotal) * 100).toFixed(2)),
-        coutEstime,
-        beneficePrevu: newCommande.montantTotal - coutEstime,
-      },
+      [newCommande.id]: initialRent,
     }));
+    syncEntityToCloud('rentabilites', 'create', newCommande.id, initialRent);
 
     logEvent(
       'Conversion Devis en Commande',
@@ -1074,16 +1151,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setCommandes((prev) => [newCmd, ...prev]);
+    syncEntityToCloud('commandes', 'create', newCmd.id, newCmd);
     logEvent('Création de commande', newCmd.numero, 'Commande', `Total : ${newCmd.montantTotal.toLocaleString('fr-FR')} FCFA`);
     return newCmd;
   };
 
   const updateCommande = (updated: Commande) => {
     setCommandes((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+    syncEntityToCloud('commandes', 'update', updated.id, updated);
     logEvent('Modification de commande', updated.numero, 'Commande');
   };
 
   const updateCommandeStatut = (commandeId: string, statut: CommandeStatut, numeroSuivi?: string) => {
+    let updatedCmd: Commande | null = null;
     setCommandes((prev) =>
       prev.map((c) => {
         if (c.id !== commandeId) return c;
@@ -1101,9 +1181,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (statut === 'Disponible') updated.logistique.statutLogistique = 'DISPONIBLE';
           if (statut === 'Livré') updated.logistique.statutLogistique = 'LIVRÉ';
         }
+        updatedCmd = updated;
         return updated;
       })
     );
+    if (updatedCmd) {
+      syncEntityToCloud('commandes', 'update', commandeId, updatedCmd);
+    }
     const target = commandes.find((c) => c.id === commandeId);
     if (target) {
       logEvent('Changement statut commande', target.numero, 'Commande', `Nouveau statut : ${statut}`);
@@ -1111,16 +1195,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateCommandeLogistique = (commandeId: string, logistique: Logistique) => {
+    let updatedCmd: Commande | null = null;
     setCommandes((prev) =>
       prev.map((c) => {
         if (c.id !== commandeId) return c;
-        return {
+        const updated = {
           ...c,
           logistique,
           numeroSuivi: logistique.numeroSuivi || c.numeroSuivi,
         };
+        updatedCmd = updated;
+        return updated;
       })
     );
+    if (updatedCmd) {
+      syncEntityToCloud('commandes', 'update', commandeId, updatedCmd);
+    }
     const target = commandes.find((c) => c.id === commandeId);
     if (target) {
       logEvent('Mise à jour logistique', target.numero, 'Commande', `Statut : ${logistique.statutLogistique}`);
@@ -1133,9 +1223,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `doc-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       date: new Date().toISOString(),
     };
+    let updatedCmd: Commande | null = null;
     setCommandes((prev) =>
-      prev.map((c) => (c.id === commandeId ? { ...c, documents: [newDoc, ...(c.documents || [])] } : c))
+      prev.map((c) => {
+        if (c.id === commandeId) {
+          const updated = { ...c, documents: [newDoc, ...(c.documents || [])] };
+          updatedCmd = updated;
+          return updated;
+        }
+        return c;
+      })
     );
+    if (updatedCmd) {
+      syncEntityToCloud('commandes', 'update', commandeId, updatedCmd);
+    }
     const target = commandes.find((c) => c.id === commandeId);
     if (target) {
       logEvent('Ajout de document', `${newDoc.nom} (${target.numero})`, 'Commande');
@@ -1143,30 +1244,170 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const deleteCommandeDocument = (commandeId: string, docId: string) => {
+    let updatedCmd: Commande | null = null;
     setCommandes((prev) =>
-      prev.map((c) => (c.id === commandeId ? { ...c, documents: (c.documents || []).filter((d) => d.id !== docId) } : c))
+      prev.map((c) => {
+        if (c.id === commandeId) {
+          const updated = { ...c, documents: (c.documents || []).filter((d) => d.id !== docId) };
+          updatedCmd = updated;
+          return updated;
+        }
+        return c;
+      })
     );
+    if (updatedCmd) {
+      syncEntityToCloud('commandes', 'update', commandeId, updatedCmd);
+    }
   };
 
   const archiveCommande = (commandeId: string) => {
     const c = commandes.find((item) => item.id === commandeId);
     setCommandes((prev) => prev.map((item) => (item.id === commandeId ? { ...item, isArchived: true } : item)));
-    if (c) logEvent('Archivage de commande', c.numero, 'Commande');
+    if (c) {
+      syncEntityToCloud('commandes', 'update', commandeId, { ...c, isArchived: true });
+      logEvent('Archivage de commande', c.numero, 'Commande');
+    }
   };
 
   const unarchiveCommande = (commandeId: string) => {
     const c = commandes.find((item) => item.id === commandeId);
     setCommandes((prev) => prev.map((item) => (item.id === commandeId ? { ...item, isArchived: false } : item)));
-    if (c) logEvent('Restauration de commande', c.numero, 'Commande');
+    if (c) {
+      syncEntityToCloud('commandes', 'update', commandeId, { ...c, isArchived: false });
+      logEvent('Restauration de commande', c.numero, 'Commande');
+    }
   };
 
   const deleteCommande = (commandeId: string) => {
     const c = commandes.find((item) => item.id === commandeId);
     setCommandes((prev) => prev.filter((item) => item.id !== commandeId));
+    syncEntityToCloud('commandes', 'delete', commandeId, null);
     if (c) logEvent('Suppression définitive de commande', c.numero, 'Commande');
   };
 
+  // ===================== RECALCULATION UNIFIÉE PAIEMENTS & FACTURES =====================
+  const recalculateFacturesFromPaiements = (
+    currentFactures: Facture[],
+    currentPaiements: Paiement[],
+    targetFactureIds?: string[]
+  ): Facture[] => {
+    return currentFactures.map((fac) => {
+      if (targetFactureIds && !targetFactureIds.includes(fac.id)) {
+        return fac;
+      }
+
+      // Find all payments linked to this invoice directly or through its linked command
+      const matchingP = currentPaiements.filter(
+        (p) => p.factureId === fac.id || (Boolean(fac.commandeId) && p.commandeId === fac.commandeId)
+      );
+
+      // If no payments registered:
+      if (matchingP.length === 0) {
+        if (fac.payeeManuellement) {
+          return {
+            ...fac,
+            montantPaye: fac.total,
+            solde: 0,
+            statut: 'Payée',
+          };
+        }
+        // Legacy compatibility: If invoice had pre-existing montantPaye without detailed payments
+        if (fac.montantPaye > 0) {
+          const legacySolde = Math.max(0, fac.total - fac.montantPaye);
+          let legacyStatut = fac.statut;
+          if (legacySolde === 0) legacyStatut = 'Payée';
+          else legacyStatut = 'Partiellement payée';
+          return { ...fac, solde: legacySolde, statut: legacyStatut };
+        }
+        return {
+          ...fac,
+          montantPaye: 0,
+          solde: fac.total,
+          statut:
+            fac.statut === 'Brouillon' || fac.statut === 'Annulée' || fac.statut === 'En retard'
+              ? fac.statut
+              : 'Envoyée',
+        };
+      }
+
+      // Dynamic calculation from real associated payments
+      const totalPaye = matchingP.reduce((sum, p) => sum + (Number(p.montant) || 0), 0);
+      const solde = Math.max(0, fac.total - totalPaye);
+
+      let statut: FactureStatut;
+      if (solde === 0) {
+        statut = 'Payée';
+      } else if (totalPaye > 0) {
+        statut = 'Partiellement payée';
+      } else {
+        statut =
+          fac.statut === 'Brouillon' || fac.statut === 'Annulée' || fac.statut === 'En retard'
+            ? fac.statut
+            : 'Envoyée';
+      }
+
+      const latestPaymentDate = matchingP
+        .map((p) => p.date)
+        .sort()
+        .reverse()[0];
+
+      return {
+        ...fac,
+        montantPaye: totalPaye,
+        solde,
+        statut,
+        dateReglementFinal:
+          solde === 0 ? fac.dateReglementFinal || latestPaymentDate || new Date().toISOString() : undefined,
+        updatedAt: new Date().toISOString(),
+      };
+    });
+  };
+
+  const recalculateCommandesFromPaiements = (
+    currentCommandes: Commande[],
+    currentPaiements: Paiement[],
+    targetCommandeIds?: string[]
+  ): Commande[] => {
+    return currentCommandes.map((cmd) => {
+      if (targetCommandeIds && !targetCommandeIds.includes(cmd.id)) {
+        return cmd;
+      }
+      const matchingP = currentPaiements.filter((p) => p.commandeId === cmd.id);
+      if (matchingP.length === 0 && cmd.montantPaye > 0) {
+        // legacy preservation
+        const s = Math.max(0, cmd.montantTotal - cmd.montantPaye);
+        let st = cmd.statut;
+        if (s === 0 && cmd.statut === 'En attente de paiement') st = 'Payé';
+        return { ...cmd, solde: s, statut: st };
+      }
+      const totalPaye = matchingP.reduce((sum, p) => sum + (Number(p.montant) || 0), 0);
+      const solde = Math.max(0, cmd.montantTotal - totalPaye);
+      let statut = cmd.statut;
+      if (solde === 0) {
+        statut = 'Payé';
+      } else if (totalPaye > 0) {
+        statut = 'Partiellement payé';
+      } else if (cmd.statut === 'Payé' || cmd.statut === 'Partiellement payé') {
+        statut = 'En attente de paiement';
+      }
+      return {
+        ...cmd,
+        montantPaye: totalPaye,
+        solde,
+        statut,
+      };
+    });
+  };
+
   // ===================== PAIEMENT CRUD =====================
+  const getFacturePaiements = (factureId: string): Paiement[] => {
+    const fac = factures.find((f) => f.id === factureId);
+    if (!fac) return [];
+    return paiements.filter(
+      (p) => p.factureId === fac.id || (Boolean(fac.commandeId) && p.commandeId === fac.commandeId)
+    );
+  };
+
   const addPaiement = (paiementData: Omit<Paiement, 'id' | 'numero'>): Paiement => {
     const existingNums = paiements.map((p) => p.numero);
     const numero = generateNextNumber(parametres.prefixPaiement || 'PAY', existingNums);
@@ -1177,31 +1418,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       numero,
     };
 
-    setPaiements((prev) => [newPaiement, ...prev]);
+    const nextPaiements = [newPaiement, ...paiements];
+    setPaiements(nextPaiements);
+    syncEntityToCloud('paiements', 'create', newPaiement.id, newPaiement);
 
-    // Update target Commande montantPaye and solde
-    setCommandes((prev) =>
-      prev.map((cmd) => {
-        if (cmd.id !== newPaiement.commandeId) return cmd;
-
-        const newMontantPaye = cmd.montantPaye + newPaiement.montant;
-        const newSolde = Math.max(0, cmd.montantTotal - newMontantPaye);
-
-        let newStatut = cmd.statut;
-        if (newSolde === 0) {
-          newStatut = 'Payé';
-        } else if (newMontantPaye > 0) {
-          newStatut = 'Partiellement payé';
+    // Dynamic Recalculation of Factures
+    setFactures((prev) => {
+      const updated = recalculateFacturesFromPaiements(prev, nextPaiements);
+      updated.forEach((f) => {
+        const oldF = prev.find((item) => item.id === f.id);
+        if (
+          oldF &&
+          (oldF.montantPaye !== f.montantPaye ||
+            oldF.solde !== f.solde ||
+            oldF.statut !== f.statut)
+        ) {
+          syncEntityToCloud('factures', 'update', f.id, f);
         }
+      });
+      return updated;
+    });
 
-        return {
-          ...cmd,
-          montantPaye: newMontantPaye,
-          solde: newSolde,
-          statut: newStatut,
-        };
-      })
-    );
+    // Dynamic Recalculation of Commandes
+    setCommandes((prev) => {
+      const updated = recalculateCommandesFromPaiements(prev, nextPaiements);
+      updated.forEach((cmd) => {
+        const oldC = prev.find((item) => item.id === cmd.id);
+        if (
+          oldC &&
+          (oldC.montantPaye !== cmd.montantPaye ||
+            oldC.solde !== cmd.solde ||
+            oldC.statut !== cmd.statut)
+        ) {
+          syncEntityToCloud('commandes', 'update', cmd.id, cmd);
+        }
+      });
+      return updated;
+    });
 
     logEvent(
       'Enregistrement de paiement',
@@ -1213,40 +1466,197 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return newPaiement;
   };
 
+  const updatePaiement = (updatedP: Paiement) => {
+    const nextPaiements = paiements.map((p) => (p.id === updatedP.id ? updatedP : p));
+    setPaiements(nextPaiements);
+    syncEntityToCloud('paiements', 'update', updatedP.id, updatedP);
+
+    setFactures((prev) => {
+      const updated = recalculateFacturesFromPaiements(prev, nextPaiements);
+      updated.forEach((f) => {
+        const oldF = prev.find((item) => item.id === f.id);
+        if (
+          oldF &&
+          (oldF.montantPaye !== f.montantPaye ||
+            oldF.solde !== f.solde ||
+            oldF.statut !== f.statut)
+        ) {
+          syncEntityToCloud('factures', 'update', f.id, f);
+        }
+      });
+      return updated;
+    });
+
+    setCommandes((prev) => {
+      const updated = recalculateCommandesFromPaiements(prev, nextPaiements);
+      updated.forEach((cmd) => {
+        const oldC = prev.find((item) => item.id === cmd.id);
+        if (
+          oldC &&
+          (oldC.montantPaye !== cmd.montantPaye ||
+            oldC.solde !== cmd.solde ||
+            oldC.statut !== cmd.statut)
+        ) {
+          syncEntityToCloud('commandes', 'update', cmd.id, cmd);
+        }
+      });
+      return updated;
+    });
+
+    logEvent('Mise à jour de paiement', `${updatedP.numero} (${updatedP.montant.toLocaleString('fr-FR')} FCFA)`, 'Paiement');
+    showToast(`Paiement ${updatedP.numero} mis à jour. Soldes recalculés.`, 'success');
+  };
+
   const deletePaiement = (paiementId: string) => {
     const p = paiements.find((item) => item.id === paiementId);
     if (!p) return;
 
-    setPaiements((prev) => prev.filter((item) => item.id !== paiementId));
+    const nextPaiements = paiements.filter((item) => item.id !== paiementId);
+    setPaiements(nextPaiements);
+    syncEntityToCloud('paiements', 'delete', paiementId, null);
 
-    // Recalculate Commande
-    setCommandes((prev) =>
-      prev.map((cmd) => {
-        if (cmd.id !== p.commandeId) return cmd;
-        const remainingPaiements = paiements.filter(
-          (item) => item.commandeId === cmd.id && item.id !== paiementId
-        );
-        const newMontantPaye = remainingPaiements.reduce((sum, item) => sum + item.montant, 0);
-        const newSolde = Math.max(0, cmd.montantTotal - newMontantPaye);
-        let newStatut = cmd.statut;
-        if (newSolde === 0) {
-          newStatut = 'Payé';
-        } else if (newMontantPaye > 0) {
-          newStatut = 'Partiellement payé';
-        } else {
-          newStatut = 'En attente de paiement';
+    setFactures((prev) => {
+      const updated = recalculateFacturesFromPaiements(prev, nextPaiements);
+      updated.forEach((f) => {
+        const oldF = prev.find((item) => item.id === f.id);
+        if (
+          oldF &&
+          (oldF.montantPaye !== f.montantPaye ||
+            oldF.solde !== f.solde ||
+            oldF.statut !== f.statut)
+        ) {
+          syncEntityToCloud('factures', 'update', f.id, f);
         }
+      });
+      return updated;
+    });
 
-        return {
-          ...cmd,
-          montantPaye: newMontantPaye,
-          solde: newSolde,
-          statut: newStatut,
-        };
-      })
-    );
+    setCommandes((prev) => {
+      const updated = recalculateCommandesFromPaiements(prev, nextPaiements);
+      updated.forEach((cmd) => {
+        const oldC = prev.find((item) => item.id === cmd.id);
+        if (
+          oldC &&
+          (oldC.montantPaye !== cmd.montantPaye ||
+            oldC.solde !== cmd.solde ||
+            oldC.statut !== cmd.statut)
+        ) {
+          syncEntityToCloud('commandes', 'update', cmd.id, cmd);
+        }
+      });
+      return updated;
+    });
 
     logEvent('Suppression de paiement', `${p.numero} (${p.montant} FCFA)`, 'Paiement');
+    showToast(`Paiement ${p.numero} supprimé. Soldes recalculés.`, 'info');
+  };
+
+  const marquerFacturePayeeManuellement = (
+    factureId: string,
+    details?: {
+      montant?: number;
+      date?: string;
+      modePaiement?: ModePaiement;
+      reference?: string;
+      note?: string;
+    }
+  ): Paiement | null => {
+    const fac = factures.find((f) => f.id === factureId);
+    if (!fac) return null;
+
+    const montantReglement = details?.montant ?? (fac.solde > 0 ? fac.solde : fac.total);
+    const dateReglement = details?.date || new Date().toISOString();
+    const mode = details?.modePaiement || 'Espèces';
+    const ref = details?.reference || 'RÈGL-HORS-APP';
+    const noteText = details?.note || 'Paiement enregistré manuellement (solde reçu hors application)';
+
+    // Enregistrement d'un véritable reçu de paiement traçable
+    const existingNums = paiements.map((p) => p.numero);
+    const numero = generateNextNumber(parametres.prefixPaiement || 'PAY', existingNums);
+
+    const newPaiement: Paiement = {
+      id: `pay-${Date.now()}`,
+      numero,
+      date: dateReglement,
+      clientId: fac.clientId,
+      factureId: fac.id,
+      commandeId: fac.commandeId,
+      montant: montantReglement,
+      modePaiement: mode,
+      reference: ref,
+      note: noteText,
+      deviceOrigin: detectDeviceType(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const nextPaiements = [newPaiement, ...paiements];
+    setPaiements(nextPaiements);
+    syncEntityToCloud('paiements', 'create', newPaiement.id, newPaiement);
+
+    const updatedFacture: Facture = {
+      ...fac,
+      montantPaye: fac.total,
+      solde: 0,
+      statut: 'Payée',
+      payeeManuellement: true,
+      dateReglementFinal: dateReglement,
+      notesReglement: `${fac.notesReglement ? fac.notesReglement + ' | ' : ''}Soldée le ${new Date(
+        dateReglement
+      ).toLocaleDateString('fr-FR')} (${montantReglement.toLocaleString('fr-FR')} FCFA via ${mode})`,
+      updatedAt: new Date().toISOString(),
+    };
+
+    setFactures((prev) => prev.map((f) => (f.id === factureId ? updatedFacture : f)));
+    syncEntityToCloud('factures', 'update', fac.id, updatedFacture);
+
+    // Sync commande si liée
+    if (fac.commandeId) {
+      setCommandes((prev) => {
+        const updatedCmds = recalculateCommandesFromPaiements(prev, nextPaiements, [fac.commandeId!]);
+        updatedCmds.forEach((c) => {
+          if (c.id === fac.commandeId) syncEntityToCloud('commandes', 'update', c.id, c);
+        });
+        return updatedCmds;
+      });
+    }
+
+    logEvent(
+      'Facture marquée payée (solde reçu)',
+      `${fac.numero} — ${montantReglement.toLocaleString('fr-FR')} FCFA (${mode})`,
+      'Facture'
+    );
+    showToast(`Facture ${fac.numero} soldée. Paiement ${numero} enregistré.`, 'success');
+
+    return newPaiement;
+  };
+
+  const updateFactureStatutManuel = (
+    factureId: string,
+    nouveauStatut: FactureStatut,
+    forcePayee: boolean = false,
+    raison?: string
+  ) => {
+    const fac = factures.find((f) => f.id === factureId);
+    if (!fac) return;
+
+    let updatedFacture: Facture = {
+      ...fac,
+      statut: nouveauStatut,
+      updatedAt: new Date().toISOString(),
+    };
+
+    if (nouveauStatut === 'Payée' && forcePayee) {
+      updatedFacture.payeeManuellement = true;
+      updatedFacture.dateReglementFinal = new Date().toISOString();
+      if (raison) {
+        updatedFacture.notesReglement = `${fac.notesReglement ? fac.notesReglement + ' | ' : ''}Statut forcé 'Payée' : ${raison}`;
+      }
+    }
+
+    setFactures((prev) => prev.map((f) => (f.id === factureId ? updatedFacture : f)));
+    syncEntityToCloud('factures', 'update', factureId, updatedFacture);
+    logEvent('Modification manuelle statut facture', `${fac.numero} → ${nouveauStatut}`, 'Facture');
+    showToast(`Statut de ${fac.numero} mis à jour en "${nouveauStatut}".`, 'info');
   };
 
   // ===================== FACTURE CRUD V4 =====================
@@ -1274,7 +1684,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       total: targetCmd.montantTotal,
       montantPaye: targetCmd.montantPaye,
       solde: targetCmd.solde,
-      statut: targetCmd.solde === 0 ? 'PAYÉ' : targetCmd.montantPaye > 0 ? 'PARTIELLEMENT PAYÉ' : 'Émise',
+      statut: targetCmd.solde === 0 ? 'Payée' : targetCmd.montantPaye > 0 ? 'Partiellement payée' : 'Envoyée',
       conditions: parametres.mentionsLegalesDefaut,
       isArchived: false,
       updatedAt: new Date().toISOString(),
@@ -1360,10 +1770,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       date: factureData.date || new Date().toISOString(),
       statut:
         factureData.solde === 0
-          ? 'PAYÉ'
+          ? 'Payée'
           : factureData.montantPaye > 0
-          ? 'PARTIELLEMENT PAYÉ'
-          : factureData.statut || 'Émise',
+          ? 'Partiellement payée'
+          : factureData.statut || 'Envoyée',
       isArchived: false,
       updatedAt: new Date().toISOString(),
       deviceOrigin: detectDeviceType(),
@@ -1480,6 +1890,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...prev,
       [commandeId]: rent,
     }));
+    syncEntityToCloud('rentabilites', 'update', commandeId, rent);
 
     if (cmd) {
       logEvent(
@@ -1500,6 +1911,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetDemoData = () => {
+    autoBackupBeforeRestore();
     setClients(initialClients);
     setFournisseurs(initialFournisseurs);
     setSourcingList(initialSourcing);
@@ -1516,6 +1928,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const clearAllData = () => {
+    autoBackupBeforeRestore();
+    const preservedBackup = localStorage.getItem(STORAGE_KEYS.BACKUP_AUTO_PRE_RESTORE);
     setClients([]);
     setFournisseurs([]);
     setSourcingList([]);
@@ -1527,6 +1941,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setHistorique([]);
     setGoogleDriveBackups([]);
     localStorage.clear();
+    if (preservedBackup) {
+      localStorage.setItem(STORAGE_KEYS.BACKUP_AUTO_PRE_RESTORE, preservedBackup);
+    }
     logEvent('Purge complète des données locales', 'Base locale', 'Système');
   };
 
@@ -1785,11 +2202,118 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // ===================== V4 CLOUD SYNCHRONIZATION (Windows <-> Android) =====================
-  const [syncState, setSyncState] = useState<SyncState>('synced');
+  const [currentAuthUser, setCurrentAuthUser] = useState<User | null>(getCurrentGoogleUser());
+  const [lastSyncError, setLastSyncError] = useState<string | null>(null);
+  const [offlinePendingCount, setOfflinePendingCount] = useState<number>(() => getOfflineQueue().length);
+  const [syncState, setSyncState] = useState<SyncState>(() => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) return 'offline';
+    return getOfflineQueue().length > 0 ? 'pending' : 'synced';
+  });
   const [syncLastTime, setSyncLastTime] = useState<string>(
     localStorage.getItem('nantor_v4_sync_last_time') || new Date().toISOString()
   );
-  const [offlinePendingCount, setOfflinePendingCount] = useState<number>(() => getOfflineQueue().length);
+
+  // Maintain Firebase Auth state listener and proactively authenticate if online
+  useEffect(() => {
+    const unsubscribe = onAuthUserChanged((user) => {
+      setCurrentAuthUser(user);
+    });
+
+    if (navigator.onLine && !auth.currentUser) {
+      ensureAuthenticated().then((user) => {
+        if (user) setCurrentAuthUser(user);
+      });
+    }
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Listen to offline queue updates to accurately maintain 'pending' status
+  useEffect(() => {
+    const handleQueueEvent = (e: any) => {
+      const qLen = typeof e?.detail === 'number' ? e.detail : getOfflineQueue().length;
+      setOfflinePendingCount(qLen);
+      if (!navigator.onLine) {
+        setSyncState('offline');
+      } else if (qLen > 0 && syncState !== 'syncing' && syncState !== 'error') {
+        setSyncState('pending');
+      } else if (qLen === 0 && syncState === 'pending') {
+        setSyncState('synced');
+      }
+    };
+
+    window.addEventListener('nantor_offline_queue_updated', handleQueueEvent);
+    return () => {
+      window.removeEventListener('nantor_offline_queue_updated', handleQueueEvent);
+    };
+  }, [syncState]);
+
+  // Real-time synchronization subscription for current user
+  useEffect(() => {
+    if (!currentAuthUser?.uid) return;
+    const userId = currentAuthUser.uid;
+
+    const unsubscribe = subscribeToUserCollections(userId, (colName, items) => {
+      if (colName === 'clients') {
+        setClients((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'fournisseurs') {
+        setFournisseurs((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'sourcing') {
+        setSourcingList((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'devis') {
+        setDevis((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'commandes') {
+        setCommandes((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'paiements') {
+        setPaiements((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'factures') {
+        setFactures((prev) => mergeCollectionEntities(prev, items));
+      } else if (colName === 'rentabilites') {
+        const rentMap: Record<string, Rentabilite> = {};
+        items.forEach((r: any) => {
+          if (r.commandeId) rentMap[r.commandeId] = r;
+        });
+        setRentabilites((prev) => ({ ...prev, ...rentMap }));
+      }
+      const now = new Date().toISOString();
+      setSyncLastTime(now);
+      const remainingQueue = getOfflineQueue().length;
+      setOfflinePendingCount(remainingQueue);
+      if (remainingQueue > 0) {
+        setSyncState('pending');
+      } else {
+        setSyncState('synced');
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentAuthUser?.uid]);
+
+  const signInWithGoogle = async () => {
+    try {
+      const res = await googleSignIn();
+      setCurrentAuthUser(res.user);
+      showToast(`Connecté avec Google : ${res.user.email || res.user.displayName}`, 'success');
+      // Proactively synchronize user data
+      await syncNow();
+    } catch (err: any) {
+      showToast(`Échec de connexion Google : ${err?.message || 'Erreur inconnue'}`, 'error');
+    }
+  };
+
+  const signOutGoogle = async () => {
+    try {
+      await googleLogout();
+      setCurrentAuthUser(null);
+      showToast('Déconnecté de Google.', 'info');
+    } catch (err: any) {
+      showToast(`Erreur déconnexion : ${err?.message || 'Erreur'}`, 'error');
+    }
+  };
 
   const syncStats: SyncStats = useMemo(() => {
     return {
@@ -1802,26 +2326,44 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       sourcing: sourcingList.length,
       pendingOfflineQueue: offlinePendingCount,
       lastSyncTime: syncLastTime,
+      lastError: lastSyncError,
+      userId: currentAuthUser?.uid,
+      userEmail: currentAuthUser?.email || (currentAuthUser?.isAnonymous ? 'Session anonyme sécurisée' : undefined),
+      isGoogleConnected: Boolean(currentAuthUser && !currentAuthUser.isAnonymous),
     };
-  }, [clients, devis, commandes, factures, paiements, fournisseurs, sourcingList, offlinePendingCount, syncLastTime]);
+  }, [clients, devis, commandes, factures, paiements, fournisseurs, sourcingList, offlinePendingCount, syncLastTime, lastSyncError, currentAuthUser]);
+
+  // Helper to ensure an active UID
+  const getActiveUserId = async (): Promise<string | undefined> => {
+    if (currentAuthUser?.uid) return currentAuthUser.uid;
+    const authed = await ensureAuthenticated();
+    if (authed) {
+      setCurrentAuthUser(authed);
+      return authed.uid;
+    }
+    return undefined;
+  };
 
   // Flush pending offline queue whenever coming online
   useEffect(() => {
     const handleOnline = async () => {
       setSyncState('syncing');
-      const res = await flushOfflineQueue();
-      setOfflinePendingCount(getOfflineQueue().length);
+      setLastSyncError(null);
+      const userId = await getActiveUserId();
+      const res = await flushOfflineQueue(userId);
+      const qLen = getOfflineQueue().length;
+      setOfflinePendingCount(qLen);
       if (res.success) {
         setSyncState('synced');
         showToast('Connexion rétablie : file hors ligne synchronisée avec succès.', 'success');
       } else {
-        setSyncState('offline');
+        setSyncState(qLen > 0 ? 'pending' : 'synced');
       }
     };
 
     const handleOffline = () => {
       setSyncState('offline');
-      showToast('Mode hors ligne activé. Vos modifications sont enregistrées localement.', 'info');
+      showToast('Mode hors ligne activé. Vos données locales restent sécurisées.', 'info');
     };
 
     window.addEventListener('online', handleOnline);
@@ -1836,32 +2378,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [currentAuthUser]);
 
   const syncNow = async (): Promise<{ success: boolean; message: string }> => {
     if (!navigator.onLine) {
       setSyncState('offline');
+      setLastSyncError('Appareil hors ligne');
       return { success: false, message: 'Appareil hors ligne. Connexion requise.' };
     }
 
     try {
       setSyncState('syncing');
+      setLastSyncError(null);
+      const userId = await getActiveUserId();
+
       // 1. Flush offline queue first
-      await flushOfflineQueue();
-      setOfflinePendingCount(getOfflineQueue().length);
+      await flushOfflineQueue(userId);
+      const qLen = getOfflineQueue().length;
+      setOfflinePendingCount(qLen);
 
       // 2. Fetch latest updates from cloud
-      const cloudData = await fetchAllCollectionsFromCloud();
+      const cloudData = await fetchAllCollectionsFromCloud(userId);
       if (cloudData) {
-        // Merge or populate if cloud has data
-        if (cloudData.clients.length > 0) setClients(cloudData.clients);
-        if (cloudData.devis.length > 0) setDevis(cloudData.devis);
-        if (cloudData.commandes.length > 0) setCommandes(cloudData.commandes);
-        if (cloudData.factures.length > 0) setFactures(cloudData.factures);
-        if (cloudData.paiements.length > 0) setPaiements(cloudData.paiements);
-        if (cloudData.fournisseurs.length > 0) setFournisseurs(cloudData.fournisseurs);
-        if (cloudData.sourcingList.length > 0) setSourcingList(cloudData.sourcingList);
-        if (Object.keys(cloudData.rentabilites).length > 0) setRentabilites(cloudData.rentabilites);
+        // Merge without wiping local data
+        if (cloudData.clients.length > 0) {
+          setClients((prev) => mergeCollectionEntities(prev, cloudData.clients));
+        }
+        if (cloudData.devis.length > 0) {
+          setDevis((prev) => mergeCollectionEntities(prev, cloudData.devis));
+        }
+        if (cloudData.commandes.length > 0) {
+          setCommandes((prev) => mergeCollectionEntities(prev, cloudData.commandes));
+        }
+        if (cloudData.factures.length > 0) {
+          setFactures((prev) => mergeCollectionEntities(prev, cloudData.factures));
+        }
+        if (cloudData.paiements.length > 0) {
+          setPaiements((prev) => mergeCollectionEntities(prev, cloudData.paiements));
+        }
+        if (cloudData.fournisseurs.length > 0) {
+          setFournisseurs((prev) => mergeCollectionEntities(prev, cloudData.fournisseurs));
+        }
+        if (cloudData.sourcingList.length > 0) {
+          setSourcingList((prev) => mergeCollectionEntities(prev, cloudData.sourcingList));
+        }
+        if (Object.keys(cloudData.rentabilites).length > 0) {
+          setRentabilites((prev) => ({ ...prev, ...cloudData.rentabilites }));
+        }
       } else {
         // Cloud is empty, push local data as initial cloud seed
         await pushAllLocalDataToCloud({
@@ -1873,81 +2436,146 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           fournisseurs,
           sourcingList,
           rentabilites,
-        });
+        }, userId);
       }
+
+      const remainingQueue = getOfflineQueue().length;
+      setOfflinePendingCount(remainingQueue);
 
       const now = new Date().toISOString();
       setSyncLastTime(now);
       localStorage.setItem('nantor_v4_sync_last_time', now);
       updateParametres({ derniereSynchroCloudDate: now });
-      setSyncState('synced');
+      setLastSyncError(null);
+
+      if (remainingQueue > 0) {
+        setSyncState('pending');
+      } else {
+        setSyncState('synced');
+      }
+
       logEvent('Synchronisation Cloud V4', 'Windows ↔ Android synchronisés', 'Système');
       showToast('Synchronisation Cloud V4 terminée avec succès.', 'success');
       return { success: true, message: 'Synchronisation Cloud réussie.' };
     } catch (e: any) {
       setSyncState('error');
+      setLastSyncError(e?.message || 'Erreur lors de la synchronisation');
       console.error('Erreur syncNow:', e);
+      showToast('Erreur de synchronisation Cloud. Vos données locales sont préservées.', 'error');
       return { success: false, message: e?.message || 'Erreur lors de la synchronisation' };
     }
   };
 
   const uploadAllToCloud = async (): Promise<{ success: boolean; message: string }> => {
+    if (!navigator.onLine) {
+      setSyncState('offline');
+      setLastSyncError('Appareil hors ligne');
+      return { success: false, message: 'Appareil hors ligne.' };
+    }
     setSyncState('syncing');
-    const res = await pushAllLocalDataToCloud({
-      clients,
-      devis,
-      commandes,
-      factures,
-      paiements,
-      fournisseurs,
-      sourcingList,
-      rentabilites,
-    });
-    if (res.success) {
-      const now = new Date().toISOString();
-      setSyncLastTime(now);
-      setSyncState('synced');
-      updateParametres({ derniereSynchroCloudDate: now });
-      logEvent('Envoi complet vers le Cloud', `${res.totalUploaded} éléments synchronisés`, 'Système');
-      showToast(`${res.totalUploaded} éléments synchronisés vers le Cloud Firestore.`, 'success');
-      return { success: true, message: `${res.totalUploaded} éléments envoyés vers le Cloud.` };
-    } else {
+    setLastSyncError(null);
+    try {
+      const userId = await getActiveUserId();
+      const res = await pushAllLocalDataToCloud({
+        clients,
+        devis,
+        commandes,
+        factures,
+        paiements,
+        fournisseurs,
+        sourcingList,
+        rentabilites,
+      }, userId);
+      if (res.success) {
+        const now = new Date().toISOString();
+        setSyncLastTime(now);
+        setSyncState('synced');
+        setLastSyncError(null);
+        updateParametres({ derniereSynchroCloudDate: now });
+        logEvent('Envoi complet vers le Cloud', `${res.totalUploaded} éléments synchronisés`, 'Système');
+        showToast(`${res.totalUploaded} éléments synchronisés vers le Cloud Firestore.`, 'success');
+        return { success: true, message: `${res.totalUploaded} éléments envoyés vers le Cloud.` };
+      } else {
+        setSyncState('error');
+        setLastSyncError(res.error || 'Échec envoi Cloud');
+        showToast(`Échec envoi Cloud : ${res.error}. Données locales préservées.`, 'error');
+        return { success: false, message: res.error || 'Erreur' };
+      }
+    } catch (err: any) {
       setSyncState('error');
-      showToast(`Échec envoi Cloud : ${res.error}`, 'error');
-      return { success: false, message: res.error || 'Erreur' };
+      setLastSyncError(err?.message || 'Erreur');
+      return { success: false, message: err?.message || 'Erreur' };
     }
   };
 
   const downloadAllFromCloud = async (): Promise<{ success: boolean; message: string }> => {
+    if (!navigator.onLine) {
+      setSyncState('offline');
+      setLastSyncError('Appareil hors ligne');
+      return { success: false, message: 'Appareil hors ligne.' };
+    }
     setSyncState('syncing');
-    const cloudData = await fetchAllCollectionsFromCloud();
-    if (cloudData) {
-      autoBackupBeforeRestore();
-      if (cloudData.clients.length > 0) setClients(cloudData.clients);
-      if (cloudData.devis.length > 0) setDevis(cloudData.devis);
-      if (cloudData.commandes.length > 0) setCommandes(cloudData.commandes);
-      if (cloudData.factures.length > 0) setFactures(cloudData.factures);
-      if (cloudData.paiements.length > 0) setPaiements(cloudData.paiements);
-      if (cloudData.fournisseurs.length > 0) setFournisseurs(cloudData.fournisseurs);
-      if (cloudData.sourcingList.length > 0) setSourcingList(cloudData.sourcingList);
-      if (Object.keys(cloudData.rentabilites).length > 0) setRentabilites(cloudData.rentabilites);
+    setLastSyncError(null);
+    try {
+      const userId = await getActiveUserId();
+      const cloudData = await fetchAllCollectionsFromCloud(userId);
+      if (cloudData) {
+        const totalCloudItems =
+          cloudData.clients.length +
+          cloudData.devis.length +
+          cloudData.commandes.length +
+          cloudData.factures.length +
+          cloudData.paiements.length +
+          cloudData.fournisseurs.length +
+          cloudData.sourcingList.length;
 
-      const now = new Date().toISOString();
-      setSyncLastTime(now);
-      setSyncState('synced');
-      logEvent('Téléchargement Cloud Firestore', 'Données Cloud appliquées en local', 'Système');
-      showToast('Données synchronisées depuis le Cloud avec succès.', 'success');
-      return { success: true, message: 'Données synchronisées depuis le Cloud avec succès.' };
-    } else {
+        // Protection: Never wipe local data if cloud is empty
+        if (totalCloudItems === 0) {
+          setSyncState('pending');
+          showToast('Le Cloud est vide : vos données locales sont intégralement préservées.', 'info');
+          return { success: true, message: 'Cloud vide, données locales conservées.' };
+        }
+
+        autoBackupBeforeRestore();
+        // Smart non-destructive merge
+        if (cloudData.clients.length > 0) setClients((prev) => mergeCollectionEntities(prev, cloudData.clients));
+        if (cloudData.devis.length > 0) setDevis((prev) => mergeCollectionEntities(prev, cloudData.devis));
+        if (cloudData.commandes.length > 0) setCommandes((prev) => mergeCollectionEntities(prev, cloudData.commandes));
+        if (cloudData.factures.length > 0) setFactures((prev) => mergeCollectionEntities(prev, cloudData.factures));
+        if (cloudData.paiements.length > 0) setPaiements((prev) => mergeCollectionEntities(prev, cloudData.paiements));
+        if (cloudData.fournisseurs.length > 0) setFournisseurs((prev) => mergeCollectionEntities(prev, cloudData.fournisseurs));
+        if (cloudData.sourcingList.length > 0) setSourcingList((prev) => mergeCollectionEntities(prev, cloudData.sourcingList));
+        if (Object.keys(cloudData.rentabilites).length > 0) {
+          setRentabilites((prev) => ({ ...prev, ...cloudData.rentabilites }));
+        }
+
+        const now = new Date().toISOString();
+        setSyncLastTime(now);
+        setSyncState('synced');
+        setLastSyncError(null);
+        logEvent('Téléchargement Cloud Firestore', 'Données Cloud appliquées en local', 'Système');
+        showToast('Données synchronisées depuis le Cloud avec succès.', 'success');
+        return { success: true, message: 'Données synchronisées depuis le Cloud avec succès.' };
+      } else {
+        setSyncState('error');
+        setLastSyncError('Impossible de récupérer les données Cloud');
+        showToast('Impossible de récupérer les données Cloud. Vos données locales restent intactes.', 'error');
+        return { success: false, message: 'Impossible de joindre le Cloud' };
+      }
+    } catch (err: any) {
       setSyncState('error');
-      showToast('Impossible de récupérer les données Cloud.', 'error');
-      return { success: false, message: 'Impossible de joindre le Cloud' };
+      setLastSyncError(err?.message || 'Erreur téléchargement Cloud');
+      showToast('Erreur téléchargement Cloud. Données locales préservées.', 'error');
+      return { success: false, message: err?.message || 'Erreur' };
     }
   };
 
   const clearOfflinePendingQueue = () => {
     setOfflinePendingCount(0);
     localStorage.removeItem('nantor_v4_sync_offline_queue');
+    if (syncState === 'pending') {
+      setSyncState('synced');
+    }
     showToast('File d’attente hors ligne purgée.', 'info');
   };
 
@@ -2018,7 +2646,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Paiements
         addPaiement,
+        updatePaiement,
         deletePaiement,
+        getFacturePaiements,
 
         // Factures V4
         generateFactureFromCommande,
@@ -2029,6 +2659,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         unarchiveFacture,
         restoreFacture: unarchiveFacture,
         deleteFacture,
+        marquerFacturePayeeManuellement,
+        updateFactureStatutManuel,
 
         // Cloud Synchronization V4 (Windows <-> Android)
         syncState,
@@ -2037,6 +2669,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         uploadAllToCloud,
         downloadAllFromCloud,
         clearOfflinePendingQueue,
+        currentAuthUser,
+        signInWithGoogle,
+        signOutGoogle,
 
         // Rentabilité
         saveRentabilite,

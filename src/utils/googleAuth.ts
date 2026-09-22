@@ -6,6 +6,7 @@ import {
   onAuthStateChanged,
   User,
   signOut,
+  signInAnonymously,
 } from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 
@@ -91,4 +92,29 @@ export const googleLogout = async (): Promise<void> => {
   await signOut(auth);
   cachedAccessToken = null;
   cachedUser = null;
+};
+
+export const getCurrentUserId = (): string | null => {
+  return auth.currentUser ? auth.currentUser.uid : null;
+};
+
+export const onAuthUserChanged = (callback: (user: User | null) => void) => {
+  return onAuthStateChanged(auth, (user) => {
+    cachedUser = user;
+    callback(user);
+  });
+};
+
+export const ensureAuthenticated = async (): Promise<User | null> => {
+  if (auth.currentUser) return auth.currentUser;
+  if (!navigator.onLine) return null;
+  try {
+    const cred = await signInAnonymously(auth);
+    cachedUser = cred.user;
+    return cred.user;
+  } catch (err) {
+    // Non-blocking: anonymous auth might not be toggled or device is offline
+    console.warn('Authentification anonyme non active ou réseau inaccessible:', err);
+    return null;
+  }
 };

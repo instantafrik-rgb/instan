@@ -14,6 +14,10 @@ import {
   Zap,
   Trash2,
   ShieldCheck,
+  UserCheck,
+  LogIn,
+  LogOut,
+  Lock,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { formatDate } from '../utils/formatters';
@@ -27,6 +31,9 @@ export const CloudSyncView: React.FC = () => {
     downloadAllFromCloud,
     clearOfflinePendingQueue,
     parametres,
+    currentAuthUser,
+    signInWithGoogle,
+    signOutGoogle,
   } = useApp();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -77,36 +84,80 @@ export const CloudSyncView: React.FC = () => {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setIsLoading(true);
+    setFeedback(null);
+    try {
+      await signInWithGoogle();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleGoogleSignOut = async () => {
+    setIsLoading(true);
+    setFeedback(null);
+    try {
+      await signOutGoogle();
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const getStatusBadge = () => {
     switch (syncState) {
       case 'synced':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            Synchronisé & À jour
-          </span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+              <span className="text-xs">🟢</span>
+              Synchronisé
+            </span>
+            <span className="text-[11px] text-indigo-200 font-medium">Données locales à jour</span>
+          </div>
+        );
+      case 'pending':
+        return (
+          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
+              <span className="text-xs">🟡</span>
+              Modifications en attente ({syncStats.pendingOfflineQueue})
+            </span>
+            <span className="text-[11px] text-amber-200 font-medium">Synchronisation cloud en attente</span>
+          </div>
         );
       case 'syncing':
         return (
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-950/60 dark:text-blue-300 border border-blue-300 dark:border-blue-800 animate-pulse">
-            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            <span className="text-xs animate-spin">🔄</span>
             Synchronisation en cours...
           </span>
         );
       case 'offline':
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
-            <Clock className="w-3.5 h-3.5" />
-            Hors ligne (Modifications en attente : {syncStats.pendingOfflineQueue})
-          </span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-300 dark:border-slate-700">
+              <span className="text-xs">⚪</span>
+              Hors connexion
+            </span>
+            <span className="text-[11px] text-indigo-200 font-medium">Données locales à jour</span>
+          </div>
         );
       case 'error':
       default:
         return (
-          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
-            <AlertTriangle className="w-3.5 h-3.5" />
-            Erreur de connexion Cloud
-          </span>
+          <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300 border border-rose-300 dark:border-rose-800">
+              <span className="text-xs">🔴</span>
+              Erreur de synchronisation
+            </span>
+            <button
+              onClick={handleSyncNow}
+              className="text-[11px] text-rose-300 hover:text-white underline font-semibold cursor-pointer transition text-left sm:text-right"
+            >
+              Réessayer
+            </button>
+          </div>
         );
     }
   };
@@ -140,6 +191,98 @@ export const CloudSyncView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* CLOUD VS GOOGLE SHEETS DISTINCTION NOTICE */}
+      <div className="p-3.5 bg-blue-50/80 dark:bg-blue-950/40 rounded-xl border border-blue-200 dark:border-blue-900/60 text-xs text-blue-900 dark:text-blue-300 flex items-start gap-2.5">
+        <Smartphone className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+        <div className="space-y-0.5">
+          <span className="font-bold block">
+            Ce système gère la synchronisation multi-appareils (Android ↔ Ordinateur)
+          </span>
+          <p className="text-[11px] leading-relaxed text-blue-800 dark:text-blue-200">
+            Ce module réplique automatiquement votre base de données entre votre téléphone et votre PC. Si vous souhaitez exporter vos commandes et clients dans un tableur Google Sheets pour consultation ou comptabilité, utilisez l'onglet dédié <strong>« Google Sheets (NantorApp → Sheets) »</strong>.
+          </p>
+        </div>
+      </div>
+
+      {/* Security & Authentication Card */}
+      <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h4 className="font-bold text-sm text-slate-900 dark:text-white">
+                  Sécurité Cloud & Compte Utilisateur
+                </h4>
+                {currentAuthUser && !currentAuthUser.isAnonymous ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
+                    Compte Google
+                  </span>
+                ) : (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
+                    Session Sécurisée
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {currentAuthUser?.email
+                  ? `Connecté en tant que : ${currentAuthUser.email}`
+                  : `ID Utilisateur sécurisé : ${currentAuthUser?.uid || 'Attribution en cours...'}`}
+              </p>
+              <p className="text-[11px] text-indigo-600 dark:text-indigo-400 font-mono mt-1">
+                Chemin Firestore isolé : /users/{currentAuthUser?.uid || 'userId'}/[collections]
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {currentAuthUser && !currentAuthUser.isAnonymous ? (
+              <button
+                onClick={handleGoogleSignOut}
+                disabled={isLoading}
+                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Déconnexion Google
+              </button>
+            ) : (
+              <button
+                onClick={handleGoogleSignIn}
+                disabled={isLoading}
+                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+              >
+                <LogIn className="w-3.5 h-3.5" />
+                Se connecter avec Google
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Last Sync Error Alert with Direct Retry */}
+      {syncStats.lastError && (
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 flex items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2.5 text-rose-800 dark:text-rose-300">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-rose-600 dark:text-rose-400" />
+            <div>
+              <p className="font-bold">Erreur de synchronisation : {syncStats.lastError}</p>
+              <p className="text-[11px] text-rose-700 dark:text-rose-400 mt-0.5">
+                Vos données locales restent 100% intactes et disponibles sur cet appareil.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleSyncNow}
+            disabled={isLoading}
+            className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs shrink-0 cursor-pointer shadow-xs transition active:scale-95"
+          >
+            Réessayer
+          </button>
+        </div>
+      )}
 
       {/* Feedback Alert */}
       {feedback && (
@@ -191,11 +334,33 @@ export const CloudSyncView: React.FC = () => {
           className="p-4 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-indigo-500 disabled:opacity-50 text-slate-800 dark:text-slate-200 font-bold text-xs sm:text-sm flex flex-col items-center justify-center gap-2 shadow-xs transition-all cursor-pointer"
         >
           <DownloadCloud className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-          <span>Forcer Réception depuis Cloud</span>
+          <span>Réception sécurisée depuis Cloud</span>
           <span className="text-[10px] font-normal text-slate-500">
-            Écraser depuis la base distante
+            Fusion intelligente avec sauvegarde auto
           </span>
         </button>
+      </div>
+
+      {/* Protection & Fiabilité des données */}
+      <div className="p-4 sm:p-5 bg-gradient-to-r from-emerald-50/70 to-teal-50/50 dark:from-emerald-950/30 dark:to-teal-950/20 rounded-2xl border border-emerald-200/80 dark:border-emerald-900/40 text-xs space-y-2">
+        <h4 className="font-bold text-emerald-900 dark:text-emerald-300 flex items-center gap-2">
+          <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+          Fiabilité & Protection contre la perte de données
+        </h4>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-[11px] text-emerald-800 dark:text-emerald-300/90">
+          <div className="p-2.5 bg-white/70 dark:bg-black/20 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+            <span className="font-bold block text-emerald-950 dark:text-emerald-200">1. Stockage Local Prioritaire</span>
+            Toutes vos créations, devis et commandes sont d'abord enregistrées localement sans latence.
+          </div>
+          <div className="p-2.5 bg-white/70 dark:bg-black/20 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+            <span className="font-bold block text-emerald-950 dark:text-emerald-200">2. Aucun vidage accidentel</span>
+            En cas d'erreur de connexion ou de Cloud vide, vos données locales sont préservées intactes.
+          </div>
+          <div className="p-2.5 bg-white/70 dark:bg-black/20 rounded-xl border border-emerald-100 dark:border-emerald-900/30">
+            <span className="font-bold block text-emerald-950 dark:text-emerald-200">3. Sauvegarde de précaution</span>
+            Un instantané automatique est créé avant toute opération de restauration ou d'importation.
+          </div>
+        </div>
       </div>
 
       {/* Device indicators */}

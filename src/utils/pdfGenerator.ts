@@ -1,7 +1,242 @@
 import { jsPDF } from 'jspdf';
-import { Devis, Facture, Client, Parametres } from '../types';
+import { Devis, Facture, Client, Parametres, Paiement } from '../types';
 import { formatCurrency, formatPdfCurrency, formatDate } from './formatters';
 
+// Palette Professionnelle & Sobre (Monochrome Chic & Accents Épurés)
+const cInk = [18, 18, 18];          // #121212 - Titres & éléments principaux
+const cDark = [15, 23, 42];         // #0F172A - Texte sombre
+const cSlate = [51, 65, 85];        // #334155 - Texte secondaire
+const cMuted = [100, 116, 139];     // #64748B - Métadonnées & libellés
+const cCardBg = [248, 250, 252];    // #F8FAFC - Fond cartes & alternance
+const cBorder = [226, 232, 240];    // #E2E8F0 - Bordures fines
+const cBorderSubtle = [241, 245, 249]; // #F1F5F9 - Lignes légères
+
+// Accents Statuts (Discrets & élégants)
+const cEmerald = [5, 150, 105];     // #059669 - Soldé / Payé
+const cEmeraldBg = [236, 253, 245]; // #ECFDF5
+const cEmeraldBorder = [16, 185, 129]; // #10B981
+
+const cAmber = [180, 83, 9];        // #B45309 - Acompte partiel
+const cAmberBg = [254, 243, 199];   // #FEF3C7
+const cAmberBorder = [245, 158, 11]; // #F59E0B
+
+/**
+ * Dessine une image en conservant strictement ses proportions originales (sans étirement ni déformation).
+ */
+function drawContainedImage(
+  doc: jsPDF,
+  imgData: string,
+  boxX: number,
+  boxY: number,
+  maxW: number,
+  maxH: number
+): boolean {
+  if (!imgData || typeof imgData !== 'string') return false;
+  try {
+    const props = doc.getImageProperties(imgData);
+    if (!props || !props.width || !props.height) return false;
+    const imgRatio = props.width / props.height;
+    const boxRatio = maxW / maxH;
+    let w = maxW;
+    let h = maxH;
+    if (imgRatio > boxRatio) {
+      w = maxW;
+      h = maxW / imgRatio;
+    } else {
+      h = maxH;
+      w = maxH * imgRatio;
+    }
+    const offsetX = boxX + (maxW - w) / 2;
+    const offsetY = boxY + (maxH - h) / 2;
+    let format = props.fileType || 'JPEG';
+    if (imgData.includes('image/png')) format = 'PNG';
+    else if (imgData.includes('image/webp')) format = 'WEBP';
+    doc.addImage(imgData, format, offsetX, offsetY, w, h, undefined, 'FAST');
+    return true;
+  } catch (err) {
+    console.warn('Image PDF non chargée:', err);
+    return false;
+  }
+}
+
+/**
+ * Dessine un emplacement neutre et discret pour un produit sans photo.
+ * Ne contient JAMAIS la mention "Sans photo".
+ */
+function drawNeutralPhotoPlaceholder(doc: jsPDF, x: number, y: number, size: number): void {
+  doc.setFillColor(248, 250, 252);
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(x, y, size, size, 1, 1, 'FD');
+
+  // Silhouette minimaliste / Icône discrète
+  doc.setDrawColor(203, 213, 225);
+  doc.setLineWidth(0.25);
+  const iconW = size * 0.46;
+  const iconH = size * 0.36;
+  const iconX = x + (size - iconW) / 2;
+  const iconY = y + (size - iconH) / 2;
+  doc.roundedRect(iconX, iconY, iconW, iconH, 0.6, 0.6, 'S');
+  doc.circle(x + size / 2, y + size / 2, size * 0.1, 'S');
+  doc.setLineWidth(0.2);
+}
+
+/**
+ * Dessine l'en-tête commun standardisé (AFRIQUE-CHINA SOURCING PRO)
+ */
+function drawCommonHeader(
+  doc: jsPDF,
+  params: Parametres,
+  docType: 'FACTURE' | 'DEVIS',
+  docNumero: string,
+  docDate: string,
+  badgeInfo?: { text: string; type: 'paid' | 'partial' | 'unpaid' }
+): number {
+  // Fine bande d'accentuation en tête de page (2.5mm)
+  doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+  doc.rect(0, 0, 210, 2.5, 'F');
+
+  // Détection et affichage du Logo
+  let leftTextX = 14;
+  const hasLogo = !!params.entreprise.logo;
+  if (hasLogo && params.entreprise.logo) {
+    const drawn = drawContainedImage(doc, params.entreprise.logo, 14, 6, 20, 16);
+    if (drawn) {
+      leftTextX = 38;
+    }
+  }
+
+  // Entreprise (À gauche)
+  const nomEntreprise = params.entreprise.nom || 'AFRIQUE-CHINA SOURCING PRO';
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(13);
+  doc.text(nomEntreprise, leftTextX, 11);
+
+  // Informations de contact essentielles (Téléphone, WhatsApp, Email, Ville/pays)
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+
+  const telWa = `Tél : ${params.entreprise.telephone || '+228 90 12 34 56'}   •   WhatsApp : ${params.entreprise.whatsapp || '+228 90 12 34 56'}`;
+  doc.text(telWa, leftTextX, 16);
+
+  const emailVille = `Email : ${params.entreprise.email || 'contact@nantorsourcing.com'}   •   Ville : ${params.entreprise.ville || 'Lomé'}${params.entreprise.pays ? `, ${params.entreprise.pays}` : ''}`;
+  doc.text(emailVille, leftTextX, 20.5);
+
+  if (params.entreprise.adresse) {
+    const adr = params.entreprise.adresse.length > 55 ? `${params.entreprise.adresse.substring(0, 52)}...` : params.entreprise.adresse;
+    doc.text(`Adresse : ${adr}`, leftTextX, 25);
+  }
+
+  // Bloc Document (À droite)
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(17);
+  doc.text(docType, 196, 12, { align: 'right' });
+
+  doc.setFontSize(9.5);
+  doc.setFont('helvetica', 'bold');
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  doc.text(`N° ${docNumero}`, 196, 17.5, { align: 'right' });
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  doc.text(`Date : ${formatDate(docDate)}`, 196, 22.5, { align: 'right' });
+
+  // Badge Statut discret dans l'en-tête (Unique indication visuelle du statut)
+  if (badgeInfo) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    const textWidth = doc.getTextWidth(badgeInfo.text);
+    const badgeW = Math.max(30, textWidth + 8);
+    const badgeH = 5.8;
+    const badgeX = 196 - badgeW;
+    const badgeY = 25;
+
+    if (badgeInfo.type === 'paid') {
+      doc.setFillColor(cEmeraldBg[0], cEmeraldBg[1], cEmeraldBg[2]);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'F');
+      doc.setDrawColor(cEmeraldBorder[0], cEmeraldBorder[1], cEmeraldBorder[2]);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'S');
+
+      doc.setTextColor(cEmerald[0], cEmerald[1], cEmerald[2]);
+      doc.text(badgeInfo.text, badgeX + badgeW / 2, badgeY + 4.1, { align: 'center' });
+    } else if (badgeInfo.type === 'partial') {
+      doc.setFillColor(cAmberBg[0], cAmberBg[1], cAmberBg[2]);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'F');
+      doc.setDrawColor(cAmberBorder[0], cAmberBorder[1], cAmberBorder[2]);
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'S');
+
+      doc.setTextColor(cAmber[0], cAmber[1], cAmber[2]);
+      doc.text(badgeInfo.text, badgeX + badgeW / 2, badgeY + 4.1, { align: 'center' });
+    } else if (badgeInfo.type === 'unpaid') {
+      doc.setFillColor(241, 245, 249); // #F1F5F9 (neutre doux)
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'F');
+      doc.setDrawColor(203, 213, 225); // #CBD5E1
+      doc.roundedRect(badgeX, badgeY, badgeW, badgeH, 1, 1, 'S');
+
+      doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+      doc.text(badgeInfo.text, badgeX + badgeW / 2, badgeY + 4.1, { align: 'center' });
+    }
+  }
+
+  // Ligne de séparation élégante
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.line(14, 33, 196, 33);
+
+  return 37; // Retourne le Y suivant
+}
+
+/**
+ * Dessine l'en-tête compact de continuation sur les pages suivantes (Page 2+)
+ */
+function drawContinuationHeader(
+  doc: jsPDF,
+  params: Parametres,
+  docType: 'FACTURE' | 'DEVIS',
+  docNumero: string
+): number {
+  doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+  doc.rect(0, 0, 210, 2.5, 'F');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8);
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  const nom = params.entreprise.nom || 'AFRIQUE-CHINA SOURCING PRO';
+  doc.text(`${nom}   —   ${docType} N° ${docNumero} (suite)`, 14, 8);
+
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.line(14, 11, 196, 11);
+
+  return 15;
+}
+
+/**
+ * Ajoute la numérotation "Page X / Y" et le pied de page officiel sur toutes les pages.
+ */
+function finalizeDocumentPages(doc: jsPDF, params: Parametres): void {
+  const totalPages = doc.getNumberOfPages();
+  const nomEntreprise = params.entreprise.nom || 'AFRIQUE-CHINA SOURCING PRO';
+
+  for (let p = 1; p <= totalPages; p++) {
+    doc.setPage(p);
+
+    // Ligne fine séparatrice de bas de page
+    doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+    doc.line(14, 284, 196, 284);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7.2);
+    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+    doc.text(`${nomEntreprise} • Document officiel de gestion commerciale`, 14, 288.5);
+    doc.text(`Page ${p} sur ${totalPages}`, 196, 288.5, { align: 'right' });
+  }
+}
+
+// =========================================================================
+// 1. GÉNÉRATION PDF DEVIS (PROPOSITION COMMERCIALE VISUELLE)
+// =========================================================================
 export function generateDevisPDF(
   devis: Devis,
   client: Client | undefined,
@@ -16,311 +251,242 @@ export function generateDevisPDF(
   const clientName = client ? client.nom.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Client';
   const filename = `${devis.numero}_${clientName}.pdf`;
 
-  // Palette Monochrome Moderne (Blanc, Noir & Nuances Épurées)
-  const primaryBlack = [18, 18, 18]; // #121212
-  const charcoalDark = [38, 38, 38]; // #262626
-  const textDark = [24, 24, 27]; // #18181B
-  const textMuted = [113, 113, 122]; // #71717A
-  const bgLight = [250, 250, 250]; // #FAFAFA
-  const borderLight = [228, 228, 231]; // #E4E4E7
-  const borderSubtle = [212, 212, 216]; // #D4D4D8
+  // 1. En-tête Commun
+  let curY = drawCommonHeader(doc, params, 'DEVIS', devis.numero, devis.date);
 
-  // Header Background Bar (Noir épuré)
-  doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.rect(0, 0, 210, 32, 'F');
+  // 2. Blocs Client & Informations Devis (Côte à côte)
+  const clientBoxY = curY;
+  const boxHeight = 27;
 
-  // Company Name & Tagline
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.text(params.entreprise.nom || 'NANTOR SOURCING APP', 14, 14);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(212, 212, 216);
-  doc.text('Sourcing Alibaba & Logistique Chine - Afrique', 14, 20);
-
-  // Document Badge (Right Header - Monochrome Chic)
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(138, 7, 58, 18, 1.5, 1.5, 'F');
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10.5);
-  doc.text('DEVIS PROFORMA', 142, 14);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor( charcoals(charcoalDark) );
-  doc.text(`N° ${devis.numero}`, 142, 20);
-
-  function charcoals(c: number[]): number {
-    return c[0];
-  }
-
-  // Company Contact block
-  doc.setFontSize(8);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  let topInfoY = 40;
-  const compLines = [
-    `Tél : ${params.entreprise.telephone || '+228 90 00 00 00'} | WhatsApp : ${params.entreprise.whatsapp || '+228 90 00 00 00'}`,
-    `Email : ${params.entreprise.email || 'contact@nantorsourcing.com'} | Ville : ${params.entreprise.ville || 'Lomé, Togo'}`,
-    params.entreprise.adresse ? `Adresse : ${params.entreprise.adresse}` : '',
-  ].filter(Boolean);
-
-  compLines.forEach((line) => {
-    doc.text(line, 14, topInfoY);
-    topInfoY += 4.5;
-  });
-
-  // Divider
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.line(14, topInfoY + 2, 196, topInfoY + 2);
-
-  // Client Box & Metadata Box
-  const clientBoxY = topInfoY + 6;
-  // Left: Client Box
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(14, clientBoxY, 100, 30, 2, 2, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(14, clientBoxY, 100, 30, 2, 2, 'S');
+  // Bloc Client (Gauche)
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(14, clientBoxY, 98, boxHeight, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(14, clientBoxY, 98, boxHeight, 1.5, 1.5, 'S');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('CLIENT DESTINATAIRE', 18, clientBoxY + 6);
+  doc.setFontSize(7.5);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  doc.text('CLIENT DESTINATAIRE', 18, clientBoxY + 5.5);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.text(client ? client.nom : 'Client Inconnu', 18, clientBoxY + 12.5);
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  doc.text(client ? client.nom : 'Client particulier', 18, clientBoxY + 11.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+
+  let cInfoY = clientBoxY + 16.5;
+  if (client?.telephone) {
+    const waText = client.whatsapp && client.whatsapp !== client.telephone ? `   •   WA : ${client.whatsapp}` : '';
+    doc.text(`Tél : ${client.telephone}${waText}`, 18, cInfoY);
+    cInfoY += 4.5;
+  }
+  if (client?.ville || client?.quartier || client?.adresse) {
+    const adr = [client.ville, client.quartier, client.adresse].filter(Boolean).join(' - ');
+    const truncatedAdr = adr.length > 50 ? `${adr.substring(0, 48)}...` : adr;
+    doc.text(`Ville / Adresse : ${truncatedAdr}`, 18, cInfoY);
+  }
+
+  // Bloc Informations Devis (Droite)
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(116, clientBoxY, 80, boxHeight, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(116, clientBoxY, 80, boxHeight, 1.5, 1.5, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  doc.text('INFORMATIONS DEVIS', 120, clientBoxY + 5.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  doc.text(`Tél : ${client?.telephone || 'Non renseigné'} / WA : ${client?.whatsapp || 'Non renseigné'}`, 18, clientBoxY + 18.5);
-  doc.text(`Ville : ${client?.ville || 'Lomé'}${client?.quartier ? ` - ${client.quartier}` : ''}`, 18, clientBoxY + 24);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text(`Date d'émission : ${formatDate(devis.date)}`, 120, clientBoxY + 11.5);
+  doc.text(`Statut : ${devis.statut}`, 120, clientBoxY + 16.5);
+  doc.text(`Validité : 7 jours sous réserve stocks Chine`, 120, clientBoxY + 21.5);
 
-  // Right: Devis Info Box
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(120, clientBoxY, 76, 30, 2, 2, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(120, clientBoxY, 76, 30, 2, 2, 'S');
+  curY = clientBoxY + boxHeight + 6;
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('RÉFÉRENCES COTATION', 124, clientBoxY + 6);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.text(`Date : ${formatDate(devis.date)}`, 124, clientBoxY + 13);
-  doc.text(`Statut : ${devis.statut}`, 124, clientBoxY + 19);
-  doc.text(`Devise : ${params.devise || 'FCFA'}`, 124, clientBoxY + 25);
-
-  // Items Table Header
-  const tableStartY = clientBoxY + 36;
-  const drawTableHeader = (startY: number) => {
-    doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-    doc.rect(14, startY, 182, 8, 'F');
+  // 3. Tableau des Articles (Photos Produits Obligatoires)
+  const drawDevisTableHeader = (startY: number) => {
+    doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+    doc.rect(14, startY, 182, 7.5, 'F');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(255, 255, 255);
-    doc.text('N°', 16, startY + 5.5);
-    doc.text('PHOTO', 27, startY + 5.5);
-    doc.text('DÉSIGNATION / ARTICLE', 46, startY + 5.5);
-    doc.text(`P.U. (${params.devise})`, 136, startY + 5.5, { align: 'right' });
-    doc.text('QTÉ', 158, startY + 5.5, { align: 'center' });
-    doc.text(`TOTAL (${params.devise})`, 192, startY + 5.5, { align: 'right' });
+    doc.text('PHOTO', 24, startY + 5, { align: 'center' });
+    doc.text('ARTICLE / DÉSIGNATION', 38, startY + 5);
+    doc.text(`P.U. (${params.devise})`, 146, startY + 5, { align: 'right' });
+    doc.text('QTÉ', 162, startY + 5, { align: 'center' });
+    doc.text(`TOTAL (${params.devise})`, 192, startY + 5, { align: 'right' });
   };
 
-  drawTableHeader(tableStartY);
+  drawDevisTableHeader(curY);
+  curY += 7.5;
 
-  // Rows with Photo Thumbnail Rendering
-  let curY = tableStartY + 8;
-  const rowHeight = 17; // mm for row with photo
+  const rowHeight = 17; // Hauteur uniforme optimale pour vignette photo 13x13mm
+  const photoSize = 13;
 
   devis.articles.forEach((art, idx) => {
-    // Pagination check
+    // Gestion multi-pages dynamique
     if (curY + rowHeight > 265) {
       doc.addPage();
-      // Mini header
-      doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-      doc.rect(0, 0, 210, 12, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      doc.text(`${params.entreprise.nom || 'NANTOR SOURCING APP'} — Devis N° ${devis.numero} (suite)`, 14, 8);
-
-      curY = 18;
-      drawTableHeader(curY);
-      curY += 8;
+      curY = drawContinuationHeader(doc, params, 'DEVIS', devis.numero);
+      drawDevisTableHeader(curY);
+      curY += 7.5;
     }
 
-    const isEven = idx % 2 === 0;
-    if (isEven) {
+    // Fond alterné
+    if (idx % 2 === 0) {
       doc.setFillColor(252, 252, 252);
       doc.rect(14, curY, 182, rowHeight, 'F');
     }
-    doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
+    doc.setDrawColor(cBorderSubtle[0], cBorderSubtle[1], cBorderSubtle[2]);
     doc.line(14, curY + rowHeight, 196, curY + rowHeight);
 
-    // Number
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.text(`${idx + 1}`, 16, curY + 9);
-
-    // Photo Box & Image Embedding
-    const photoBoxX = 24;
+    // Photo Produit Obligatoire (Taille uniforme & proportions conservées)
+    const photoBoxX = 18;
     const photoBoxY = curY + 2;
-    const photoSize = 13;
-
-    doc.setFillColor(244, 244, 245);
-    doc.setDrawColor(borderSubtle[0], borderSubtle[1], borderSubtle[2]);
-    doc.roundedRect(photoBoxX, photoBoxY, photoSize, photoSize, 1, 1, 'FD');
 
     if (art.photo) {
-      try {
-        let imgFormat = 'JPEG';
-        if (art.photo.includes('image/png')) imgFormat = 'PNG';
-        else if (art.photo.includes('image/webp')) imgFormat = 'WEBP';
-        doc.addImage(art.photo, imgFormat, photoBoxX, photoBoxY, photoSize, photoSize, undefined, 'FAST');
-      } catch (e) {
-        console.warn('Erreur lors de l\'intégration de l\'image dans le PDF:', e);
-        doc.setFontSize(6.5);
-        doc.setFont('helvetica', 'normal');
-        doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-        doc.text('Photo', photoBoxX + 6.5, photoBoxY + 7.5, { align: 'center' });
+      const drawn = drawContainedImage(doc, art.photo, photoBoxX, photoBoxY, photoSize, photoSize);
+      if (!drawn) {
+        drawNeutralPhotoPlaceholder(doc, photoBoxX, photoBoxY, photoSize);
       }
     } else {
-      doc.setFontSize(6.5);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(160, 160, 160);
-      doc.text('Sans photo', photoBoxX + 6.5, photoBoxY + 7.5, { align: 'center' });
+      // Emplacement neutre et discret (JAMAIS "Sans photo")
+      drawNeutralPhotoPlaceholder(doc, photoBoxX, photoBoxY, photoSize);
     }
 
-    // Designation & Spec
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
+    // Désignation & Spécifications
+    doc.setTextColor(cDark[0], cDark[1], cDark[2]);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    const splitTitle = doc.splitTextToSize(art.nomProduit, 72);
-    doc.text(splitTitle[0] || art.nomProduit, 44, curY + 6);
+    doc.setFontSize(8.2);
+    const splitTitle = doc.splitTextToSize(art.nomProduit, 82);
+    doc.text(splitTitle[0] || art.nomProduit, 38, curY + 5.8);
 
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
+    doc.setFontSize(7.2);
+    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
     if (art.description) {
-      const descLine = art.description.length > 55 ? `${art.description.substring(0, 52)}...` : art.description;
-      doc.text(descLine, 44, curY + 10.5);
+      const descLine = art.description.length > 58 ? `${art.description.substring(0, 55)}...` : art.description;
+      doc.text(descLine, 38, curY + 10.2);
     }
     if (art.lienAlibaba) {
       doc.setFontSize(6.5);
-      doc.setTextColor(70, 70, 70);
-      doc.text('Réf / Lien fournisseur Chine fourni', 44, curY + 14);
+      doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+      doc.text('Réf / Fournisseur Chine vérifié', 38, curY + 14);
     }
 
-    // Pricing
+    // Prix et Quantité
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-    doc.text(formatPdfCurrency(art.prixUnitaire, '').trim(), 136, curY + 9, { align: 'right' });
-    doc.text(`${art.quantite}`, 158, curY + 9, { align: 'center' });
+    doc.setFontSize(8);
+    doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+    doc.text(formatPdfCurrency(art.prixUnitaire, '').trim(), 146, curY + 9.5, { align: 'right' });
+    doc.text(String(art.quantite), 162, curY + 9.5, { align: 'center' });
 
+    // Total ligne
     doc.setFont('helvetica', 'bold');
-    doc.text(formatPdfCurrency(art.total, '').trim(), 192, curY + 9, { align: 'right' });
+    doc.text(formatPdfCurrency(art.total, '').trim(), 192, curY + 9.5, { align: 'right' });
 
     curY += rowHeight;
   });
 
-  // Check if enough room for totals and terms (needs ~65mm)
-  if (curY + 65 > 280) {
+  // 4. Récapitulatif Financier & Conditions
+  const totalsNeededHeight = 55;
+  if (curY + totalsNeededHeight > 268) {
     doc.addPage();
-    doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-    doc.rect(0, 0, 210, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.text(`${params.entreprise.nom || 'NANTOR SOURCING APP'} — Devis N° ${devis.numero} (Récapitulatif)`, 14, 8);
-    curY = 20;
+    curY = drawContinuationHeader(doc, params, 'DEVIS', devis.numero);
   }
 
-  // Totals Area (Épuré Monochrome)
   curY += 6;
-  const totalsX = 114;
-  const totalsWidth = 82;
+  const startRecapY = curY;
 
-  // Sous-total
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.text('Sous-total articles :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(devis.sousTotal, params.devise), 196, curY + 4, { align: 'right' });
-
-  // Frais livraison Chine
-  curY += 6;
-  doc.text('Frais de livraison en Chine :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(devis.fraisLivraisonChine, params.devise), 196, curY + 4, { align: 'right' });
-
-  // Frais transaction
-  curY += 6;
-  doc.text(`Frais transaction (${devis.fraisTransactionPourcent || 5} %) :`, totalsX, curY + 4);
-  doc.text(formatPdfCurrency(devis.fraisTransaction, params.devise), 196, curY + 4, { align: 'right' });
-
-  // Total à payer Box - Noir Épuré Minimaliste
-  curY += 8;
-  doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.roundedRect(totalsX - 4, curY, totalsWidth + 4, 12, 1.5, 1.5, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('TOTAL À PAYER :', totalsX, curY + 8);
-  doc.text(formatPdfCurrency(devis.total, params.devise), 194, curY + 8, { align: 'right' });
-
-  // Notes & Terms (Monochrome & Épuré)
-  const termsY = curY + 18;
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(14, termsY, 182, 34, 1.5, 1.5, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(14, termsY, 182, 34, 1.5, 1.5, 'S');
+  // Conditions & Validité (Gauche)
+  const conditionsW = 98;
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(14, startRecapY, conditionsW, 36, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(14, startRecapY, conditionsW, 36, 1.5, 1.5, 'S');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('CONDITIONS & MODALITÉS DE SOURCING', 18, termsY + 6);
-
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  const defaultTerms = [
-    '1. Validité du devis : 7 jours sous réserve de fluctuation des prix fournisseurs en Chine.',
-    '2. Lancement des achats après réception de l\'acompte ou du paiement convenu.',
-    '3. Les délais de transit maritime/aérien dépendent des compagnies de transport partenaires.',
-    '4. Modes de paiement acceptés : Espèces, TMoney, Flooz, Virement bancaire.',
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.text('CONDITIONS & MODALITÉS DU DEVIS', 18, startRecapY + 5.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  const terms = [
+    '• Validité : 7 jours sous réserve de confirmation des prix fournisseurs en Chine.',
+    '• Lancement des achats après réception de l\'acompte convenu.',
+    '• Délais logistiques : dépendants des compagnies de transport partenaires.',
+    '• Règlements acceptés : Espèces, TMoney, Flooz, Virement bancaire.',
   ];
-  defaultTerms.forEach((term, tIdx) => {
-    doc.text(term, 18, termsY + 12 + tIdx * 5);
+  terms.forEach((t, tIdx) => {
+    doc.text(t, 18, startRecapY + 11.5 + tIdx * 4.5);
   });
 
   if (devis.notes) {
     doc.setFont('helvetica', 'italic');
-    doc.text(`Notes particulières : ${devis.notes}`, 18, termsY + 31);
+    doc.setFontSize(6.5);
+    const n = devis.notes.length > 55 ? `${devis.notes.substring(0, 52)}...` : devis.notes;
+    doc.text(`Note : ${n}`, 18, startRecapY + 31);
   }
 
-  // Footer Bottom
+  // Bloc Financier Unique (Droite)
+  const totalsX = 116;
+  const totalsW = 80;
+  let finY = startRecapY;
+
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(150, 150, 150);
-  doc.text(`Document officiel — Nantor Sourcing App — ${params.entreprise.nom}`, 105, 287, { align: 'center' });
+  doc.setFontSize(8);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text('Sous-total articles :', totalsX, finY + 4);
+  doc.text(formatPdfCurrency(devis.sousTotal, params.devise), 196, finY + 4, { align: 'right' });
+
+  if (devis.fraisLivraisonChine > 0) {
+    finY += 5.5;
+    doc.text('Livraison locale en Chine :', totalsX, finY + 4);
+    doc.text(formatPdfCurrency(devis.fraisLivraisonChine, params.devise), 196, finY + 4, { align: 'right' });
+  }
+
+  if (devis.fraisTransaction > 0) {
+    finY += 5.5;
+    doc.text(`Frais transaction (${devis.fraisTransactionPourcent || 5} %) :`, totalsX, finY + 4);
+    doc.text(formatPdfCurrency(devis.fraisTransaction, params.devise), 196, finY + 4, { align: 'right' });
+  }
+
+  // TOTAL DU DEVIS (L'un des éléments les plus visibles)
+  finY += 7.5;
+  doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+  doc.roundedRect(totalsX - 2, finY, totalsW + 2, 11, 1.5, 1.5, 'F');
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9.5);
+  doc.text('TOTAL DU DEVIS :', totalsX + 2, finY + 7.2);
+  doc.text(formatPdfCurrency(devis.total, params.devise), 194, finY + 7.2, { align: 'right' });
+
+  // 5. Finalisation des pages et pieds de page
+  finalizeDocumentPages(doc, params);
 
   const blob = doc.output('blob');
   return { blob, filename, doc };
 }
 
+// =========================================================================
+// 2. GÉNÉRATION PDF FACTURE (DOCUMENT DE FACTURATION ET DE RÈGLEMENT)
+// =========================================================================
 export function generateFacturePDF(
   facture: Facture,
   client: Client | undefined,
-  params: Parametres
+  params: Parametres,
+  paiementsList?: Paiement[]
 ): { blob: Blob; filename: string; doc: jsPDF } {
   const doc = new jsPDF({
     orientation: 'portrait',
@@ -331,281 +497,412 @@ export function generateFacturePDF(
   const clientName = client ? client.nom.replace(/[^a-zA-Z0-9_-]/g, '_') : 'Client';
   const filename = `${facture.numero}_${clientName}.pdf`;
 
-  const primaryBlack = [18, 18, 18];
-  const charcoalDark = [38, 38, 38];
-  const textDark = [24, 24, 27];
-  const textMuted = [113, 113, 122];
-  const bgLight = [250, 250, 250];
-  const borderLight = [228, 228, 231];
-  const borderSubtle = [212, 212, 216];
+  // Vérification stricte des statuts
+  const isPayee = facture.solde <= 0 || facture.statut === 'Payée' || facture.statut === 'PAYÉ';
+  const isPartielle =
+    !isPayee &&
+    (facture.montantPaye > 0 ||
+      facture.statut === 'Partiellement payée' ||
+      facture.statut === 'PARTIELLEMENT PAYÉ');
 
-  // Header Bar (Noir Épuré)
-  doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.rect(0, 0, 210, 32, 'F');
+  // Badge unique dans l'en-tête (SEULE indication visuelle du statut de paiement dans toute la facture)
+  let headerBadge: { text: string; type: 'paid' | 'partial' | 'unpaid' } = {
+    text: 'À PAYER',
+    type: 'unpaid',
+  };
+  if (isPayee) {
+    headerBadge = { text: '✓ PAYÉE / SOLDÉE', type: 'paid' };
+  } else if (isPartielle) {
+    headerBadge = { text: '🟠 PARTIELLEMENT PAYÉE', type: 'partial' };
+  }
 
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.text(params.entreprise.nom || 'NANTOR SOURCING APP', 14, 14);
+  // 1. En-tête Commun
+  let curY = drawCommonHeader(doc, params, 'FACTURE', facture.numero, facture.date, headerBadge);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(212, 212, 216);
-  doc.text('Facture officielle & Récapitulatif des règlements', 14, 20);
+  // 2. Blocs Client & Informations Facture (Côte à côte)
+  const clientBoxY = curY;
+  const boxHeight = 27;
 
-  // Badge Status Right
-  doc.setFillColor(255, 255, 255);
-  doc.roundedRect(138, 7, 58, 18, 1.5, 1.5, 'F');
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(10);
-  doc.text(`FACTURE : ${facture.statut}`, 142, 14);
-  doc.setFontSize(8);
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(charcoalDark[0], charcoalDark[1], charcoalDark[2]);
-  doc.text(`N° ${facture.numero}`, 142, 20);
-
-  // Contacts
-  doc.setFontSize(8);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  let topInfoY = 40;
-  const compLines = [
-    `Tél : ${params.entreprise.telephone || '+228 90 00 00 00'} | WhatsApp : ${params.entreprise.whatsapp || '+228 90 00 00 00'}`,
-    `Email : ${params.entreprise.email || 'contact@nantorsourcing.com'} | Ville : ${params.entreprise.ville || 'Lomé, Togo'}`,
-  ];
-  compLines.forEach((line) => {
-    doc.text(line, 14, topInfoY);
-    topInfoY += 4.5;
-  });
-
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.line(14, topInfoY + 2, 196, topInfoY + 2);
-
-  // Boxes
-  const clientBoxY = topInfoY + 6;
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(14, clientBoxY, 100, 30, 2, 2, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(14, clientBoxY, 100, 30, 2, 2, 'S');
+  // Bloc FACTURÉ À (Gauche)
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(14, clientBoxY, 98, boxHeight, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(14, clientBoxY, 98, boxHeight, 1.5, 1.5, 'S');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('FACTURÉ À', 18, clientBoxY + 6);
+  doc.setFontSize(7.5);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  doc.text('FACTURÉ À', 18, clientBoxY + 5.5);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.text(client ? client.nom : 'Client Inconnu', 18, clientBoxY + 12.5);
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  doc.text(client ? client.nom : 'Client particulier', 18, clientBoxY + 11.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+
+  let cInfoY = clientBoxY + 16.5;
+  if (client?.telephone) {
+    const waText = client.whatsapp && client.whatsapp !== client.telephone ? `   •   WA : ${client.whatsapp}` : '';
+    doc.text(`Tél : ${client.telephone}${waText}`, 18, cInfoY);
+    cInfoY += 4.5;
+  }
+  if (client?.ville || client?.quartier || client?.adresse) {
+    const adr = [client.ville, client.quartier, client.adresse].filter(Boolean).join(' - ');
+    const truncatedAdr = adr.length > 50 ? `${adr.substring(0, 48)}...` : adr;
+    doc.text(`Ville / Adresse : ${truncatedAdr}`, 18, cInfoY);
+  }
+
+  // Bloc INFORMATIONS FACTURE (Droite)
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(116, clientBoxY, 80, boxHeight, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(116, clientBoxY, 80, boxHeight, 1.5, 1.5, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.5);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  doc.text('INFORMATIONS FACTURE', 120, clientBoxY + 5.5);
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  doc.text(`Tél : ${client?.telephone || 'Non renseigné'} / WA : ${client?.whatsapp || 'Non renseigné'}`, 18, clientBoxY + 18.5);
-  doc.text(`Ville : ${client?.ville || 'Lomé'}${client?.quartier ? ` - ${client.quartier}` : ''}`, 18, clientBoxY + 24);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text(`Date d'émission : ${formatDate(facture.date)}`, 120, clientBoxY + 11.5);
 
-  // Facture Info Box
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(120, clientBoxY, 76, 30, 2, 2, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(120, clientBoxY, 76, 30, 2, 2, 'S');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('DÉTAILS FACTURE', 124, clientBoxY + 6);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.text(`Date : ${formatDate(facture.date)}`, 124, clientBoxY + 13);
-  const refText = facture.commandeId
+  const refCommande = facture.commandeId
     ? `Réf. Commande : ${facture.commandeId}`
     : facture.devisId
     ? `Réf. Devis : ${facture.devisId}`
     : 'Facture directe';
-  doc.text(refText.length > 25 ? `${refText.substring(0, 24)}.` : refText, 124, clientBoxY + 19);
-  doc.text(`Statut : ${facture.statut}`, 124, clientBoxY + 25);
+  doc.text(refCommande.length > 28 ? `${refCommande.substring(0, 26)}...` : refCommande, 120, clientBoxY + 16.5);
 
-  // Table Header
-  const tableStartY = clientBoxY + 36;
+  const echeance = facture.dateEcheance ? `Échéance : ${formatDate(facture.dateEcheance)}` : 'Règlement : Comptant';
+  doc.text(echeance, 120, clientBoxY + 21.5);
+
+  curY = clientBoxY + boxHeight + 6;
+
+  // 3. Tableau des Articles
+  // Règle photos : Si les produits n'ont AUCUNE photo, supprimer simplement la colonne photo !
+  const hasAnyPhoto = facture.articles.some((art) => !!art.photo);
+
   const drawFactureTableHeader = (startY: number) => {
-    doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-    doc.rect(14, startY, 182, 8, 'F');
+    doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+    doc.rect(14, startY, 182, 7.5, 'F');
 
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8);
+    doc.setFontSize(7.5);
     doc.setTextColor(255, 255, 255);
-    doc.text('N°', 16, startY + 5.5);
-    doc.text('PHOTO', 27, startY + 5.5);
-    doc.text('ARTICLE / DÉSIGNATION', 46, startY + 5.5);
-    doc.text(`P.U. (${params.devise})`, 136, startY + 5.5, { align: 'right' });
-    doc.text('QTÉ', 158, startY + 5.5, { align: 'center' });
-    doc.text(`TOTAL (${params.devise})`, 192, startY + 5.5, { align: 'right' });
+
+    if (hasAnyPhoto) {
+      doc.text('PHOTO', 24, startY + 5, { align: 'center' });
+      doc.text('ARTICLE / DÉSIGNATION', 38, startY + 5);
+      doc.text(`P.U. (${params.devise})`, 146, startY + 5, { align: 'right' });
+      doc.text('QTÉ', 162, startY + 5, { align: 'center' });
+      doc.text(`TOTAL (${params.devise})`, 192, startY + 5, { align: 'right' });
+    } else {
+      // Pas de colonne photo : N° en première colonne et colonne désignation élargie
+      doc.text('N°', 19, startY + 5, { align: 'center' });
+      doc.text('ARTICLE / DÉSIGNATION', 30, startY + 5);
+      doc.text(`P.U. (${params.devise})`, 146, startY + 5, { align: 'right' });
+      doc.text('QTÉ', 162, startY + 5, { align: 'center' });
+      doc.text(`TOTAL (${params.devise})`, 192, startY + 5, { align: 'right' });
+    }
   };
 
-  drawFactureTableHeader(tableStartY);
+  drawFactureTableHeader(curY);
+  curY += 7.5;
 
-  // Rows
-  let curY = tableStartY + 8;
-  const rowHeight = 17;
+  // Hauteur de ligne adaptée
+  const rowHeight = hasAnyPhoto ? 16 : 10.5;
+  const photoSize = 12;
 
   facture.articles.forEach((art, idx) => {
     if (curY + rowHeight > 265) {
       doc.addPage();
-      doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-      doc.rect(0, 0, 210, 12, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(8.5);
-      doc.text(`${params.entreprise.nom || 'NANTOR SOURCING APP'} — Facture N° ${facture.numero} (suite)`, 14, 8);
-
-      curY = 18;
+      curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
       drawFactureTableHeader(curY);
-      curY += 8;
+      curY += 7.5;
     }
 
-    const isEven = idx % 2 === 0;
-    if (isEven) {
+    if (idx % 2 === 0) {
       doc.setFillColor(252, 252, 252);
       doc.rect(14, curY, 182, rowHeight, 'F');
     }
-    doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
+    doc.setDrawColor(cBorderSubtle[0], cBorderSubtle[1], cBorderSubtle[2]);
     doc.line(14, curY + rowHeight, 196, curY + rowHeight);
 
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.text(`${idx + 1}`, 16, curY + 9);
+    if (hasAnyPhoto) {
+      // Photo disponible
+      const photoBoxX = 18;
+      const photoBoxY = curY + 2;
 
-    // Photo Box & Image Embedding
-    const photoBoxX = 24;
-    const photoBoxY = curY + 2;
-    const photoSize = 13;
+      if (art.photo) {
+        const drawn = drawContainedImage(doc, art.photo, photoBoxX, photoBoxY, photoSize, photoSize);
+        if (!drawn) {
+          drawNeutralPhotoPlaceholder(doc, photoBoxX, photoBoxY, photoSize);
+        }
+      } else {
+        drawNeutralPhotoPlaceholder(doc, photoBoxX, photoBoxY, photoSize);
+      }
 
-    doc.setFillColor(244, 244, 245);
-    doc.setDrawColor(borderSubtle[0], borderSubtle[1], borderSubtle[2]);
-    doc.roundedRect(photoBoxX, photoBoxY, photoSize, photoSize, 1, 1, 'FD');
+      // Désignation avec photo
+      doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.2);
+      const splitTitle = doc.splitTextToSize(art.nomProduit, 82);
+      doc.text(splitTitle[0] || art.nomProduit, 38, curY + 5.8);
 
-    if (art.photo) {
-      try {
-        let imgFormat = 'JPEG';
-        if (art.photo.includes('image/png')) imgFormat = 'PNG';
-        else if (art.photo.includes('image/webp')) imgFormat = 'WEBP';
-        doc.addImage(art.photo, imgFormat, photoBoxX, photoBoxY, photoSize, photoSize, undefined, 'FAST');
-      } catch (e) {
-        doc.setFontSize(6.5);
+      if (art.description) {
         doc.setFont('helvetica', 'normal');
-        doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-        doc.text('Photo', photoBoxX + 6.5, photoBoxY + 7.5, { align: 'center' });
+        doc.setFontSize(7.2);
+        doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+        const descLine = art.description.length > 58 ? `${art.description.substring(0, 55)}...` : art.description;
+        doc.text(descLine, 38, curY + 10.2);
       }
     } else {
-      doc.setFontSize(6.5);
+      // Sans colonne photo (Plus aéré et compact)
       doc.setFont('helvetica', 'normal');
-      doc.setTextColor(160, 160, 160);
-      doc.text('Sans photo', photoBoxX + 6.5, photoBoxY + 7.5, { align: 'center' });
+      doc.setFontSize(8);
+      doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+      doc.text(String(idx + 1), 19, curY + 6.5, { align: 'center' });
+
+      doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8.2);
+      const splitTitle = doc.splitTextToSize(art.nomProduit, 94);
+      doc.text(splitTitle[0] || art.nomProduit, 30, curY + 5);
+
+      if (art.description) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(7);
+        doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+        const descLine = art.description.length > 68 ? `${art.description.substring(0, 65)}...` : art.description;
+        doc.text(descLine, 30, curY + 8.8);
+      }
     }
 
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    const splitTitle = doc.splitTextToSize(art.nomProduit, 72);
-    doc.text(splitTitle[0] || art.nomProduit, 44, curY + 6);
+    // Prix, Quantité et Total
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(8);
+    doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+    const verticalAlign = hasAnyPhoto ? curY + 9 : curY + 6.5;
 
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.5);
-    doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-    if (art.description) {
-      const descLine = art.description.length > 55 ? `${art.description.substring(0, 52)}...` : art.description;
-      doc.text(descLine, 44, curY + 10.5);
-    }
+    doc.text(formatPdfCurrency(art.prixUnitaire, '').trim(), 146, verticalAlign, { align: 'right' });
+    doc.text(String(art.quantite), 162, verticalAlign, { align: 'center' });
 
-    // Pricing
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8.5);
-    doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-    doc.text(formatPdfCurrency(art.prixUnitaire, '').trim(), 136, curY + 9, { align: 'right' });
-    doc.text(`${art.quantite}`, 158, curY + 9, { align: 'center' });
     doc.setFont('helvetica', 'bold');
-    doc.text(formatPdfCurrency(art.total, '').trim(), 192, curY + 9, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
+    doc.text(formatPdfCurrency(art.total, '').trim(), 192, verticalAlign, { align: 'right' });
 
     curY += rowHeight;
   });
 
-  if (curY + 65 > 280) {
+  // 4. Récapitulatif Financier & Modalités de règlement
+  const neededRecapHeight = 44;
+  if (curY + neededRecapHeight > 268) {
     doc.addPage();
-    doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-    doc.rect(0, 0, 210, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(8.5);
-    doc.text(`${params.entreprise.nom || 'NANTOR SOURCING APP'} — Facture N° ${facture.numero} (Récapitulatif)`, 14, 8);
-    curY = 20;
+    curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
   }
 
-  // Totals Area
   curY += 6;
-  const totalsX = 114;
+  const startRecapY = curY;
+  const boxH = 34;
 
-  doc.setTextColor(textDark[0], textDark[1], textDark[2]);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.text('Sous-total articles :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(facture.sousTotal, params.devise), 196, curY + 4, { align: 'right' });
-
-  curY += 6;
-  doc.text('Frais (Livraison & Annexes) :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(facture.frais, params.devise), 196, curY + 4, { align: 'right' });
-
-  curY += 6;
-  doc.setFont('helvetica', 'bold');
-  doc.text('TOTAL FACTURE :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(facture.total, params.devise), 196, curY + 4, { align: 'right' });
-
-  curY += 6;
-  doc.setFont('helvetica', 'normal');
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  doc.text('Montant déjà réglé :', totalsX, curY + 4);
-  doc.text(formatPdfCurrency(facture.montantPaye, params.devise), 196, curY + 4, { align: 'right' });
-
-  // Solde Restant Box (Monochrome Chic)
-  curY += 8;
-  doc.setFillColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.roundedRect(totalsX - 4, curY, 86, 12, 1.5, 1.5, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.text('RESTE À PAYER (SOLDE) :', totalsX, curY + 8);
-  doc.text(formatPdfCurrency(facture.solde, params.devise), 194, curY + 8, { align: 'right' });
-
-  // Footer Notice
-  const noticeY = curY + 20;
-  doc.setFillColor(bgLight[0], bgLight[1], bgLight[2]);
-  doc.roundedRect(14, noticeY, 182, 24, 1.5, 1.5, 'F');
-  doc.setDrawColor(borderLight[0], borderLight[1], borderLight[2]);
-  doc.roundedRect(14, noticeY, 182, 24, 1.5, 1.5, 'S');
+  // Modalités de règlement (Gauche) - Factuelle, sobre et neutre
+  const leftBoxW = 98;
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(14, startRecapY, leftBoxW, boxH, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(14, startRecapY, leftBoxW, boxH, 1.5, 1.5, 'S');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8.5);
-  doc.setTextColor(primaryBlack[0], primaryBlack[1], primaryBlack[2]);
-  doc.text('MENTIONS LÉGALES & ENREGISTREMENT', 18, noticeY + 6);
-
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(textMuted[0], textMuted[1], textMuted[2]);
-  doc.text('Ce document atteste des montants engagés et des règlements perçus pour votre commande.', 18, noticeY + 12);
-  doc.text('Pour toute réclamation, veuillez contacter le service client muni du numéro de facture.', 18, noticeY + 17);
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.text('MODALITÉS DE RÈGLEMENT', 18, startRecapY + 5.5);
 
-  // Footer Bottom
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.5);
-  doc.setTextColor(150, 150, 150);
-  doc.text(`Document officiel — Nantor Sourcing App — ${params.entreprise.nom}`, 105, 287, { align: 'center' });
+  doc.setFontSize(7);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text('• Modes acceptés : Espèces, TMoney, Flooz, Virement bancaire.', 18, startRecapY + 12);
+  doc.text('• Règlement attendu selon les conditions de la commande.', 18, startRecapY + 17.5);
+  doc.text('• Un reçu officiel est émis pour chaque versement.', 18, startRecapY + 23);
+
+  if (facture.notes) {
+    doc.setFont('helvetica', 'italic');
+    doc.setFontSize(6.8);
+    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+    const n = facture.notes.length > 55 ? `${facture.notes.substring(0, 52)}...` : facture.notes;
+    doc.text(`Note : ${n}`, 18, startRecapY + 29);
+  } else {
+    doc.setFontSize(6.8);
+    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+    doc.text('Merci pour votre confiance et votre collaboration.', 18, startRecapY + 29);
+  }
+
+  // Récapitulatif Financier (Droite) - Uniquement les données financières, sans répétition de statut
+  const totalsX = 116;
+  const totalsW = 80;
+
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(totalsX, startRecapY, totalsW, boxH, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(totalsX, startRecapY, totalsW, boxH, 1.5, 1.5, 'S');
+
+  const hasFrais = facture.frais > 0;
+  let finY = startRecapY + (hasFrais ? 5.2 : 6.2);
+
+  // Sous-total articles
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.8);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text('Sous-total articles :', totalsX + 4, finY);
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  doc.text(formatPdfCurrency(facture.sousTotal, params.devise), 192, finY, { align: 'right' });
+
+  if (hasFrais) {
+    finY += 4.8;
+    doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+    doc.text('Livraison & frais annexes :', totalsX + 4, finY);
+    doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+    doc.text(formatPdfCurrency(facture.frais, params.devise), 192, finY, { align: 'right' });
+  }
+
+  // Ligne de séparation fine
+  finY += 2.8;
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.line(totalsX + 4, finY, 192, finY);
+
+  // TOTAL FACTURE
+  finY += 4.6;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.text('TOTAL FACTURE :', totalsX + 4, finY);
+  doc.text(formatPdfCurrency(facture.total, params.devise), 192, finY, { align: 'right' });
+
+  // Montant payé
+  finY += 4.8;
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.8);
+  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+  doc.text('Montant payé :', totalsX + 4, finY);
+  doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+  const montantPayeVal = facture.montantPaye || 0;
+  doc.text(formatPdfCurrency(montantPayeVal, params.devise), 192, finY, { align: 'right' });
+
+  // Ligne de séparation fine
+  finY += 2.6;
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.line(totalsX + 4, finY, 192, finY);
+
+  // Solde restant
+  finY += 4.6;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.text('Solde restant :', totalsX + 4, finY);
+  const soldeRestantVal = isPayee ? 0 : Math.max(0, facture.solde);
+  doc.text(formatPdfCurrency(soldeRestantVal, params.devise), 192, finY, { align: 'right' });
+
+  curY = startRecapY + boxH + 6;
+
+  // 5. Historique Compact des Règlements Reçus
+  if (paiementsList && paiementsList.length > 0) {
+    const payHistoryHeight = 14 + paiementsList.length * 5.5;
+    if (curY + payHistoryHeight > 268) {
+      doc.addPage();
+      curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
+    }
+
+    doc.setFillColor(cInk[0], cInk[1], cInk[2]);
+    doc.rect(14, curY, 182, 6, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.text(`PAIEMENTS REÇUS — ${paiementsList.length}`, 16, curY + 4.2);
+
+    curY += 6;
+
+    // En-tête de colonnes des paiements
+    doc.setFillColor(244, 244, 245);
+    doc.rect(14, curY, 182, 5, 'F');
+    doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(6.8);
+    doc.text('DATE', 16, curY + 3.6);
+    doc.text('MODE', 44, curY + 3.6);
+    doc.text('RÉFÉRENCE & NOTE', 80, curY + 3.6);
+    doc.text(`MONTANT (${params.devise})`, 192, curY + 3.6, { align: 'right' });
+
+    curY += 5;
+
+    paiementsList.forEach((p, pIdx) => {
+      if (curY + 5.5 > 270) {
+        doc.addPage();
+        curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
+      }
+
+      if (pIdx % 2 === 0) {
+        doc.setFillColor(252, 252, 252);
+        doc.rect(14, curY, 182, 5.2, 'F');
+      }
+      doc.setDrawColor(cBorderSubtle[0], cBorderSubtle[1], cBorderSubtle[2]);
+      doc.line(14, curY + 5.2, 196, curY + 5.2);
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(6.8);
+      doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+      doc.text(formatDate(p.date), 16, curY + 3.8);
+      doc.text(p.modePaiement, 44, curY + 3.8);
+
+      const refNote = p.reference ? `${p.reference}${p.note ? ` - ${p.note}` : ''}` : p.note || '-';
+      const refTrunc = refNote.length > 44 ? `${refNote.substring(0, 42)}...` : refNote;
+      doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+      doc.text(refTrunc, 80, curY + 3.8);
+
+      doc.setTextColor(cDark[0], cDark[1], cDark[2]);
+      doc.setFont('helvetica', 'bold');
+      doc.text(formatPdfCurrency(p.montant, '').trim(), 192, curY + 3.8, { align: 'right' });
+
+      curY += 5.2;
+    });
+
+    curY += 4;
+  }
+
+  // 6. Mentions Légales & Pièce Justificative (Zone finale sobre et compacte)
+  const noticeH = 14;
+  if (curY + noticeH > 275) {
+    doc.addPage();
+    curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
+  }
+
+  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
+  doc.roundedRect(14, curY, 182, noticeH, 1.5, 1.5, 'F');
+  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
+  doc.roundedRect(14, curY, 182, noticeH, 1.5, 1.5, 'S');
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(7.2);
+  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+  doc.text('MENTIONS LÉGALES & CONDITIONS', 18, curY + 4.5);
+
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(6.8);
+  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
+  const mentionText =
+    params.mentionsLegalesDefaut ||
+    'Document officiel attestant des prestations facturées et des règlements enregistrés. Tout retard de paiement est soumis aux conditions générales.';
+  doc.text(mentionText, 18, curY + 9.5);
+
+  // 7. Finalisation des pages et pieds de page
+  finalizeDocumentPages(doc, params);
 
   const blob = doc.output('blob');
   return { blob, filename, doc };
 }
+
 
 export function downloadPdfBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
@@ -662,16 +959,33 @@ export function getFactureWhatsAppMessage(facture: Facture, client: Client | und
   const totalFormatte = facture.total.toLocaleString('fr-FR');
   const payeFormatte = facture.montantPaye.toLocaleString('fr-FR');
   const soldeFormatte = facture.solde.toLocaleString('fr-FR');
+  const isPayee = facture.solde <= 0 || facture.statut === 'Payée' || facture.statut === 'PAYÉ';
+  const isPartielle =
+    !isPayee &&
+    (facture.montantPaye > 0 ||
+      facture.statut === 'Partiellement payée' ||
+      facture.statut === 'PARTIELLEMENT PAYÉ');
+
+  let statutLigne = `• Statut : *${facture.statut}*`;
+  let conclusion = 'Merci pour votre confiance.';
+
+  if (isPayee) {
+    statutLigne = `• Statut : *PAYÉE / SOLDÉE (Règlement intégral)*\n• Reste à payer : *0 FCFA*`;
+    conclusion = 'Nous confirmons la bonne réception de l\'intégralité de votre règlement.\nMerci infiniment pour votre confiance !';
+  } else if (isPartielle) {
+    statutLigne = `• Statut : *PARTIELLEMENT PAYÉE*\n• Montant réglé : *${payeFormatte} FCFA*\n• Solde restant : *${soldeFormatte} FCFA*`;
+    conclusion = 'Nous vous remercions pour votre acompte. Le solde restant sera dû selon les modalités convenues.';
+  } else {
+    statutLigne = `• Statut : *${facture.statut}*\n• Reste à payer : *${soldeFormatte} FCFA*`;
+  }
 
   return `Bonjour ${clientNom},
 
-Veuillez trouver ci-joint votre facture N° ${facture.numero}.
+Voici votre *Facture N° ${facture.numero}* :
+• Montant total : *${totalFormatte} FCFA*
+${statutLigne}
 
-Montant total : ${totalFormatte} FCFA.
-Montant payé : ${payeFormatte} FCFA.
-Solde : ${soldeFormatte} FCFA.
-
-Merci pour votre confiance.
+${conclusion}
 
 Nantor Sourcing App`;
 }

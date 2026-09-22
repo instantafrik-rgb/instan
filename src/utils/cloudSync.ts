@@ -1,13 +1,14 @@
 /**
  * Nantor Sourcing App - V4 Cloud Sync Service
- * Architecture: Local-First with Cloud Firestore & Bi-Directional Synchronization
+ * Architecture: Local-First with Cloud Firestore & User-Scoped Isolation
  * 
  * Supports:
- * - Windows (Web/Desktop Chrome/Electron/PWA)
- * - Android (Chrome/PWA/Trusted Web Activity)
- * - Bi-directional: Windows -> Cloud -> Android & Android -> Cloud -> Windows
- * - Offline Queue: Operations made offline are queued and auto-synced upon reconnect
- * - Conflict resolution: Timestamps and versioning (Last-Write-Wins with granular merge)
+ * - Scoped Firestore path: /users/{userId}/{collectionName}/{documentId}
+ * - Zero-trust isolation conforming strictly to firestore.rules (request.auth.uid == userId)
+ * - Windows (Web/Desktop Chrome/Electron/PWA) <-> Android (Chrome/PWA/Capacitor)
+ * - Bi-directional real-time sync with onSnapshot listener
+ * - Smart merging with Last-Write-Wins timestamps without data loss
+ * - Offline Queue: Operations made offline or unauthenticated are safely queued in localStorage
  */
 
 import { initializeApp, getApps, getApp } from 'firebase/app';
@@ -17,13 +18,9 @@ import {
   doc,
   setDoc,
   getDocs,
-  getDoc,
   deleteDoc,
-  query,
-  where,
   onSnapshot,
   Unsubscribe,
-  Timestamp,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import {
@@ -35,10 +32,9 @@ import {
   Fournisseur,
   Sourcing,
   Rentabilite,
-  SyncState,
-  SyncStats,
   OfflineQueueItem,
 } from '../types';
+import { getCurrentUserId } from './googleAuth';
 
 const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const firestore = getFirestore(app);
@@ -49,6 +45,19 @@ const STORAGE_KEYS = {
   DEVICE_ID: 'nantor_v4_sync_device_id',
   SYNC_CONFIG: 'nantor_v4_sync_config',
 };
+
+export const SYNC_COLLECTIONS = [
+  'clients',
+  'devis',
+  'commandes',
+  'factures',
+  'paiements',
+  'fournisseurs',
+  'sourcing',
+  'rentabilites',
+] as const;
+
+export type SyncCollectionType = typeof SYNC_COLLECTIONS[number];
 
 // Device identification
 export function getOrCreateDeviceId(): string {
@@ -81,6 +90,9 @@ export function getOfflineQueue(): OfflineQueueItem[] {
 export function saveOfflineQueue(queue: OfflineQueueItem[]) {
   try {
     localStorage.setItem(STORAGE_KEYS.OFFLINE_QUEUE, JSON.stringify(queue));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('nantor_offline_queue_updated', { detail: queue.length }));
+    }
   } catch (e) {
     console.error('Erreur sauvegarde file hors ligne:', e);
   }
@@ -107,16 +119,91 @@ export function clearOfflineQueue() {
   saveOfflineQueue([]);
 }
 
-// Push local collection entity to Firestore (or queue if offline)
+// Helpers for scoped user paths
+export function getUserDocRef(userId: string, colName: string, docId: string) {
+  return doc(firestore, 'users', userId, colName, docId);
+}
+
+export function getUserColRef(userId: string, colName: string) {
+  return collection(firestore, 'users', userId, colName);
+}
+
+// Smart merger for entities by ID and timestamps with deduplication and deletion safeguards
+export function mergeCollectionEntities<T extends { id?: string; updatedAt?: string; _lastUpdated?: string; date?: string; numero?: string }>(
+  localList: T[],
+  cloudList: T[]
+): T[] {
+  const map = new Map<string, T>();
+  const offlineQueue = getOfflineQueue();
+  const pendingDeletions = new Set(
+    offlineQueue.filter((q) => q.action === 'delete').map((q) => q.documentId)
+  );
+
+  // 1. Insert all local items first (preserves local IDs and authoring edits)
+  for (const item of localList) {
+    if (item && item.id) {
+      map.set(item.id, item);
+    }
+  }
+
+  // 2. Merge cloud items safely
+  for (const cloudItem of cloudList) {
+    if (!cloudItem || !cloudItem.id) continue;
+
+    // Protection: If user deleted this item locally and the delete is pending in offline queue,
+    // do NOT resurrect it from the cloud
+    if (pendingDeletions.has(cloudItem.id)) {
+      continue;
+    }
+
+    const existing = map.get(cloudItem.id);
+    if (!existing) {
+      // Deduplication check by business number (e.g. 'numero' for devis/commandes/factures)
+      if (cloudItem.numero) {
+        let duplicateFound = false;
+        for (const [existingId, existingItem] of map.entries()) {
+          if (existingItem.numero === cloudItem.numero && existingId !== cloudItem.id) {
+            duplicateFound = true;
+            // Merge properties into the existing ID if cloud is more recent, preserving existing ID
+            const cloudTime = new Date(cloudItem._lastUpdated || cloudItem.updatedAt || cloudItem.date || 0).getTime();
+            const localTime = new Date(existingItem._lastUpdated || existingItem.updatedAt || existingItem.date || 0).getTime();
+            if (cloudTime > localTime) {
+              map.set(existingId, { ...cloudItem, id: existingId });
+            }
+            break;
+          }
+        }
+        if (!duplicateFound) {
+          map.set(cloudItem.id, cloudItem);
+        }
+      } else {
+        map.set(cloudItem.id, cloudItem);
+      }
+    } else {
+      // Both exist with same ID -> compare timestamps without changing existing ID
+      const cloudTime = new Date(cloudItem._lastUpdated || cloudItem.updatedAt || cloudItem.date || 0).getTime();
+      const localTime = new Date(existing._lastUpdated || existing.updatedAt || existing.date || 0).getTime();
+      if (cloudTime > localTime) {
+        map.set(cloudItem.id, { ...existing, ...cloudItem, id: existing.id });
+      }
+    }
+  }
+
+  return Array.from(map.values());
+}
+
+// Push a single entity to user's scoped Firestore path (or queue if offline/unauthenticated)
 export async function syncEntityToCloud(
-  collectionName: 'clients' | 'devis' | 'commandes' | 'factures' | 'paiements' | 'fournisseurs' | 'sourcing' | 'rentabilites',
+  collectionName: SyncCollectionType,
   action: 'create' | 'update' | 'delete',
   documentId: string,
-  payload: any
+  payload: any,
+  targetUserId?: string
 ): Promise<boolean> {
   const isOnline = navigator.onLine;
+  const userId = targetUserId || getCurrentUserId();
 
-  if (!isOnline) {
+  if (!isOnline || !userId) {
     addToOfflineQueue({
       collection: collectionName,
       action,
@@ -128,10 +215,9 @@ export async function syncEntityToCloud(
 
   try {
     const deviceId = getOrCreateDeviceId();
-    const docRef = doc(firestore, collectionName, documentId);
+    const docRef = getUserDocRef(userId, collectionName, documentId);
 
     if (action === 'delete') {
-      // Soft-delete or hard delete
       await deleteDoc(docRef);
     } else {
       const dataToSave = {
@@ -143,9 +229,18 @@ export async function syncEntityToCloud(
       };
       await setDoc(docRef, dataToSave, { merge: true });
     }
+
+    // Update metadata document
+    const metaRef = getUserDocRef(userId, 'meta', 'sync');
+    setDoc(metaRef, {
+      lastSync: new Date().toISOString(),
+      lastDeviceId: deviceId,
+      lastDeviceType: detectDeviceType(),
+    }, { merge: true }).catch(() => {});
+
     return true;
   } catch (error) {
-    console.warn(`Erreur sync cloud pour ${collectionName}/${documentId}, mise en file hors ligne:`, error);
+    console.warn(`[CloudSync] Erreur sync ${collectionName}/${documentId} pour l'utilisateur ${userId}, mise en file:`, error);
     addToOfflineQueue({
       collection: collectionName,
       action,
@@ -156,11 +251,17 @@ export async function syncEntityToCloud(
   }
 }
 
-// Flush pending offline queue
+// Flush pending offline queue under user's scoped Firestore path
 export async function flushOfflineQueue(
+  targetUserId?: string,
   onProgress?: (processed: number, total: number) => void
 ): Promise<{ success: boolean; processed: number; errors: number }> {
   if (!navigator.onLine) {
+    return { success: false, processed: 0, errors: 0 };
+  }
+
+  const userId = targetUserId || getCurrentUserId();
+  if (!userId) {
     return { success: false, processed: 0, errors: 0 };
   }
 
@@ -172,11 +273,13 @@ export async function flushOfflineQueue(
   let processed = 0;
   let errors = 0;
   const remaining: OfflineQueueItem[] = [];
+  const deviceId = getOrCreateDeviceId();
+  const deviceType = detectDeviceType();
 
   for (let i = 0; i < queue.length; i++) {
     const item = queue[i];
     try {
-      const docRef = doc(firestore, item.collection, item.documentId);
+      const docRef = getUserDocRef(userId, item.collection, item.documentId);
       if (item.action === 'delete') {
         await deleteDoc(docRef);
       } else {
@@ -184,9 +287,10 @@ export async function flushOfflineQueue(
           docRef,
           {
             ...item.payload,
+            id: item.documentId,
             _lastUpdated: item.timestamp,
-            _deviceId: getOrCreateDeviceId(),
-            _deviceType: detectDeviceType(),
+            _deviceId: deviceId,
+            _deviceType: deviceType,
           },
           { merge: true }
         );
@@ -194,7 +298,7 @@ export async function flushOfflineQueue(
       processed++;
       if (onProgress) onProgress(processed, queue.length);
     } catch (err) {
-      console.error(`Erreur flush file ${item.collection}/${item.documentId}:`, err);
+      console.error(`[CloudSync] Échec envoi élément en attente ${item.collection}/${item.documentId}:`, err);
       errors++;
       remaining.push(item);
     }
@@ -204,8 +308,8 @@ export async function flushOfflineQueue(
   return { success: errors === 0, processed, errors };
 }
 
-// Full Cloud Fetch (Android <-> Windows full snapshot pull & merge)
-export async function fetchAllCollectionsFromCloud(): Promise<{
+// Fetch all collections from user's scoped Firestore path
+export async function fetchAllCollectionsFromCloud(targetUserId?: string): Promise<{
   clients: Client[];
   devis: Devis[];
   commandes: Commande[];
@@ -217,32 +321,25 @@ export async function fetchAllCollectionsFromCloud(): Promise<{
 } | null> {
   if (!navigator.onLine) return null;
 
-  try {
-    const collectionsToFetch = [
-      'clients',
-      'devis',
-      'commandes',
-      'factures',
-      'paiements',
-      'fournisseurs',
-      'sourcing',
-      'rentabilites',
-    ];
+  const userId = targetUserId || getCurrentUserId();
+  if (!userId) return null;
 
+  try {
     const results: any = {};
 
     await Promise.all(
-      collectionsToFetch.map(async (colName) => {
-        const colRef = collection(firestore, colName);
+      SYNC_COLLECTIONS.map(async (colName) => {
+        const colRef = getUserColRef(userId, colName);
         const snapshot = await getDocs(colRef);
         results[colName] = snapshot.docs.map((d) => d.data());
       })
     );
 
     const rentabilitesMap: Record<string, Rentabilite> = {};
-    if (results.rentabilites) {
-      results.rentabilites.forEach((r: Rentabilite) => {
-        if (r.commandeId) rentabilitesMap[r.commandeId] = r;
+    if (results.rentabilites && Array.isArray(results.rentabilites)) {
+      results.rentabilites.forEach((r: any) => {
+        const key = r.commandeId || r.id;
+        if (key) rentabilitesMap[key] = r;
       });
     }
 
@@ -257,24 +354,32 @@ export async function fetchAllCollectionsFromCloud(): Promise<{
       rentabilites: rentabilitesMap,
     };
   } catch (error) {
-    console.error('Erreur téléchargement données cloud Firestore:', error);
+    console.error('[CloudSync] Erreur téléchargement données utilisateur Firestore:', error);
     return null;
   }
 }
 
-// Full Cloud Push (Initial seed or manual full sync of local data)
-export async function pushAllLocalDataToCloud(data: {
-  clients: Client[];
-  devis: Devis[];
-  commandes: Commande[];
-  factures: Facture[];
-  paiements: Paiement[];
-  fournisseurs: Fournisseur[];
-  sourcingList: Sourcing[];
-  rentabilites: Record<string, Rentabilite>;
-}): Promise<{ success: boolean; totalUploaded: number; error?: string }> {
+// Push all local data into user's scoped Firestore path
+export async function pushAllLocalDataToCloud(
+  data: {
+    clients: Client[];
+    devis: Devis[];
+    commandes: Commande[];
+    factures: Facture[];
+    paiements: Paiement[];
+    fournisseurs: Fournisseur[];
+    sourcingList: Sourcing[];
+    rentabilites: Record<string, Rentabilite>;
+  },
+  targetUserId?: string
+): Promise<{ success: boolean; totalUploaded: number; error?: string }> {
   if (!navigator.onLine) {
     return { success: false, totalUploaded: 0, error: 'Appareil hors ligne' };
+  }
+
+  const userId = targetUserId || getCurrentUserId();
+  if (!userId) {
+    return { success: false, totalUploaded: 0, error: 'Utilisateur non authentifié' };
   }
 
   try {
@@ -286,12 +391,13 @@ export async function pushAllLocalDataToCloud(data: {
     const pushCollection = async (colName: string, items: any[], idField = 'id') => {
       for (const item of items) {
         const docId = item[idField] || `${colName}-${Date.now()}`;
-        const docRef = doc(firestore, colName, docId);
+        const docRef = getUserDocRef(userId, colName, docId);
         await setDoc(
           docRef,
           {
             ...item,
-            _lastUpdated: item.updatedAt || now,
+            id: docId,
+            _lastUpdated: item.updatedAt || item.date || now,
             _deviceId: deviceId,
             _deviceType: deviceType,
           },
@@ -312,10 +418,71 @@ export async function pushAllLocalDataToCloud(data: {
     const rentArray = Object.values(data.rentabilites);
     await pushCollection('rentabilites', rentArray, 'commandeId');
 
+    // Update metadata document
+    const metaRef = getUserDocRef(userId, 'meta', 'sync');
+    await setDoc(metaRef, {
+      lastSync: now,
+      lastDeviceId: deviceId,
+      lastDeviceType: deviceType,
+      totalUploaded,
+    }, { merge: true });
+
     localStorage.setItem(STORAGE_KEYS.LAST_SYNC, now);
     return { success: true, totalUploaded };
   } catch (e: any) {
-    console.error('Erreur export complet vers le Cloud:', e);
+    console.error('[CloudSync] Erreur export complet vers Firestore:', e);
     return { success: false, totalUploaded: 0, error: e?.message || 'Erreur inconnue' };
   }
+}
+
+// Bi-directional real-time synchronization listener (onSnapshot)
+export function subscribeToUserCollections(
+  userId: string,
+  onRemoteChange: (collectionName: SyncCollectionType, items: any[]) => void,
+  onError?: (err: any) => void
+): Unsubscribe {
+  const currentDeviceId = getOrCreateDeviceId();
+  const unsubs: Unsubscribe[] = [];
+
+  SYNC_COLLECTIONS.forEach((colName) => {
+    try {
+      const colRef = getUserColRef(userId, colName);
+      const unsub = onSnapshot(
+        colRef,
+        (snapshot) => {
+          // Check if any change was from another device
+          const remoteDocs: any[] = [];
+          let hasExternalChange = false;
+
+          snapshot.docs.forEach((d) => {
+            const data = d.data();
+            remoteDocs.push(data);
+            if (data._deviceId && data._deviceId !== currentDeviceId) {
+              hasExternalChange = true;
+            }
+          });
+
+          // Only trigger state update if there are documents and external changes or new docs
+          if (hasExternalChange || snapshot.docChanges().some((c) => c.doc.data()._deviceId !== currentDeviceId)) {
+            onRemoteChange(colName, remoteDocs);
+          }
+        },
+        (err) => {
+          console.warn(`[CloudSync] Erreur écoute temps réel pour ${colName}:`, err);
+          if (onError) onError(err);
+        }
+      );
+      unsubs.push(unsub);
+    } catch (e) {
+      console.warn(`[CloudSync] Impossible d'attacher listener sur ${colName}:`, e);
+    }
+  });
+
+  return () => {
+    unsubs.forEach((u) => {
+      try {
+        u();
+      } catch {}
+    });
+  };
 }

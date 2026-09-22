@@ -17,18 +17,26 @@ import { DevisDetailModal } from './DevisDetailModal';
 interface DevisViewProps {
   onConvertedToCommande: (commande: Commande) => void;
   preselectedClient?: Client | null;
+  initialFilter?: string | null;
 }
 
 export const DevisView: React.FC<DevisViewProps> = ({
   onConvertedToCommande,
   preselectedClient,
+  initialFilter,
 }) => {
   const { devis, clients, addDevis, updateDevis, parametres } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedStatut, setSelectedStatut] = useState<string>('all');
+  const [selectedStatut, setSelectedStatut] = useState<string>(initialFilter || 'all');
   const [selectedDevis, setSelectedDevis] = useState<Devis | null>(null);
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [editingDevis, setEditingDevis] = useState<Devis | null>(null);
+
+  React.useEffect(() => {
+    if (initialFilter) {
+      setSelectedStatut(initialFilter);
+    }
+  }, [initialFilter]);
 
   // Active devis (not archived)
   const activeDevis = devis.filter((d) => !d.isArchived);
@@ -159,10 +167,10 @@ export const DevisView: React.FC<DevisViewProps> = ({
             <button
               key={st.id}
               onClick={() => setSelectedStatut(st.id)}
-              className={`px-3 py-1 rounded-lg font-semibold whitespace-nowrap transition-all ${
+              className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-all ${
                 selectedStatut === st.id
                   ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white dark:bg-[#112238] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50'
+                  : 'bg-white dark:bg-[#112238] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
               }`}
             >
               {st.label}
@@ -173,16 +181,21 @@ export const DevisView: React.FC<DevisViewProps> = ({
 
       {/* Devis List */}
       {filteredDevis.length === 0 ? (
-        <div className="text-center py-12 bg-white dark:bg-[#112238] rounded-2xl border border-slate-200 dark:border-slate-800 p-6">
-          <FileSpreadsheet className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        <div className="text-center py-12 bg-white dark:bg-[#112238] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-2">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+            <FileSpreadsheet className="w-6 h-6" />
+          </div>
+          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
             {searchTerm || selectedStatut !== 'all'
               ? 'Aucun devis ne correspond aux critères'
               : 'Aucun devis créé'}
           </p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+            Établissez des cotations précises avec calcul automatique de fret et marges.
+          </p>
           <button
             onClick={handleOpenAdd}
-            className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5"
+            className="mt-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 shadow-sm active:scale-95 transition-all cursor-pointer"
           >
             <Plus className="w-4 h-4" />
             Créer un nouveau devis
@@ -196,23 +209,23 @@ export const DevisView: React.FC<DevisViewProps> = ({
               <div
                 key={d.id}
                 onClick={() => setSelectedDevis(d)}
-                className="bg-white dark:bg-[#112238] rounded-xl p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex items-center justify-between group"
+                className="bg-white dark:bg-[#112238] rounded-xl p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex items-center justify-between gap-3 group"
               >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-mono text-xs font-bold text-blue-600 dark:text-blue-400">
                       {d.numero}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatutBadge(d.statut)}`}>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${getStatutBadge(d.statut)}`}>
                       {d.statut}
                     </span>
                   </div>
 
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 transition-colors">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                     {client?.nom || 'Client Inconnu'}
                   </h3>
 
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
                     <span>{formatDate(d.date)}</span>
                     <span>•</span>
                     <span>{d.articles.length} article(s)</span>
@@ -221,12 +234,12 @@ export const DevisView: React.FC<DevisViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 text-right">
+                <div className="flex items-center gap-3 text-right shrink-0">
                   <div>
-                    <div className="text-sm font-bold font-mono text-slate-900 dark:text-white">
+                    <div className="text-sm sm:text-base font-bold font-mono text-slate-900 dark:text-white">
                       {formatCurrency(d.total, parametres.devise)}
                     </div>
-                    <span className="text-[10px] text-slate-400">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">
                       Livraison: {formatCurrency(d.fraisLivraisonChine, parametres.devise)}
                     </span>
                   </div>

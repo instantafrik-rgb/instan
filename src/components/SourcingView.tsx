@@ -24,9 +24,10 @@ import { formatCurrency, formatDate } from '../utils/formatters';
 interface SourcingViewProps {
   onSelectDevis?: (devis: Devis) => void;
   onNavigateToDevis?: () => void;
+  initialFilter?: string | null;
 }
 
-export const SourcingView: React.FC<SourcingViewProps> = ({ onSelectDevis, onNavigateToDevis }) => {
+export const SourcingView: React.FC<SourcingViewProps> = ({ onSelectDevis, onNavigateToDevis, initialFilter }) => {
   const {
     sourcingList,
     clients,
@@ -40,9 +41,15 @@ export const SourcingView: React.FC<SourcingViewProps> = ({ onSelectDevis, onNav
   } = useApp();
 
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('TOUS');
+  const [statusFilter, setStatusFilter] = useState<string>(initialFilter || 'TOUS');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingSourcing, setEditingSourcing] = useState<Sourcing | null>(null);
+
+  React.useEffect(() => {
+    if (initialFilter) {
+      setStatusFilter(initialFilter);
+    }
+  }, [initialFilter]);
 
   // Form states
   const [produitRecherche, setProduitRecherche] = useState('');
@@ -252,10 +259,12 @@ export const SourcingView: React.FC<SourcingViewProps> = ({ onSelectDevis, onNav
 
       {/* Sourcing Cards List */}
       {filteredSourcing.length === 0 ? (
-        <div className="text-center py-12 bg-white dark:bg-[#0B192C] rounded-2xl border border-slate-200 dark:border-slate-800">
-          <Compass className="w-12 h-12 text-slate-400 mx-auto mb-3" />
-          <p className="text-slate-600 dark:text-slate-300 font-bold text-sm">Aucune demande de sourcing trouvée</p>
-          <p className="text-xs text-slate-400 mt-1">Créez une recherche pour un client pour négocier avec les usines en Chine.</p>
+        <div className="text-center py-12 bg-white dark:bg-[#0B192C] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-2">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+            <Compass className="w-6 h-6" />
+          </div>
+          <p className="text-slate-800 dark:text-slate-200 font-bold text-sm">Aucune demande de sourcing trouvée</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">Créez une recherche pour un client afin de négocier avec les usines en Chine.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -265,16 +274,16 @@ export const SourcingView: React.FC<SourcingViewProps> = ({ onSelectDevis, onNav
             return (
               <div
                 key={s.id}
-                className="bg-white dark:bg-[#0B192C] p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs hover:border-blue-400 dark:hover:border-blue-500 transition-all flex flex-col justify-between"
+                className="bg-white dark:bg-[#0B192C] p-4 rounded-2xl border border-slate-200/90 dark:border-slate-800 shadow-xs hover:border-blue-400 dark:hover:border-blue-500 transition-all flex flex-col justify-between"
               >
                 <div>
                   {/* Top Bar */}
                   <div className="flex items-start justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-mono text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-950/50 px-2 py-0.5 rounded-md border border-blue-200 dark:border-blue-800">
                         {s.numero}
                       </span>
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatusBadge(s.statut)}`}>
+                      <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${getStatusBadge(s.statut)}`}>
                         {s.statut}
                       </span>
                     </div>

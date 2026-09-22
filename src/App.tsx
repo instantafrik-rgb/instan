@@ -39,6 +39,20 @@ const MainAppContent: React.FC = () => {
 
   const [currentTab, setCurrentTab] = useState<TabType>('dashboard');
 
+  // Filter states for navigation from Dashboard to modules
+  const [facturesFilter, setFacturesFilter] = useState<string | null>(null);
+  const [devisFilter, setDevisFilter] = useState<string | null>(null);
+  const [commandesFilter, setCommandesFilter] = useState<string | null>(null);
+  const [sourcingFilter, setSourcingFilter] = useState<string | null>(null);
+
+  const handleDashboardNavigate = (tab: TabType, filter?: string) => {
+    if (tab === 'factures') setFacturesFilter(filter || null);
+    if (tab === 'devis') setDevisFilter(filter || null);
+    if (tab === 'commandes') setCommandesFilter(filter || null);
+    if (tab === 'sourcing') setSourcingFilter(filter || null);
+    setCurrentTab(tab);
+  };
+
   // Modal active states
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
@@ -129,12 +143,14 @@ const MainAppContent: React.FC = () => {
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-4xl w-full mx-auto p-3 sm:p-5 pb-24 sm:pb-28">
+      <main className="flex-1 max-w-6xl w-full mx-auto p-3.5 sm:p-5 md:p-6 pb-24 sm:pb-28">
         {currentTab === 'dashboard' && (
           <DashboardView
-            onNavigate={setCurrentTab}
+            onNavigate={handleDashboardNavigate}
             onNewDevis={() => handleOpenNewDevis()}
             onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+            onSelectDevis={(d) => setSelectedDevisForDetail(d)}
+            onSelectFacture={(f) => setSelectedFactureForDetail(f)}
           />
         )}
 
@@ -143,6 +159,8 @@ const MainAppContent: React.FC = () => {
             onNewDevis={(client) => handleOpenNewDevis(client)}
             onSelectDevis={(d) => setSelectedDevisForDetail(d)}
             onSelectCommande={(c) => setSelectedCommandeForDetail(c)}
+            onSelectFacture={(f) => setSelectedFactureForDetail(f)}
+            onNavigateToTab={(tab) => setCurrentTab(tab)}
           />
         )}
 
@@ -150,6 +168,7 @@ const MainAppContent: React.FC = () => {
           <DevisView
             onConvertedToCommande={handleConvertedToCommande}
             preselectedClient={preselectedClientForDevis}
+            initialFilter={devisFilter}
           />
         )}
 
@@ -157,6 +176,7 @@ const MainAppContent: React.FC = () => {
           <CommandesView
             onNewPaiement={(cmd) => handleOpenNewPaiement(cmd)}
             onViewFacture={(fac) => setSelectedFactureForDetail(fac)}
+            initialFilter={commandesFilter}
           />
         )}
 
@@ -169,6 +189,7 @@ const MainAppContent: React.FC = () => {
         {currentTab === 'factures' && (
           <FacturesView
             onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+            initialFilter={facturesFilter}
           />
         )}
 
@@ -176,6 +197,7 @@ const MainAppContent: React.FC = () => {
           <SourcingView
             onSelectDevis={(d) => setSelectedDevisForDetail(d)}
             onNavigateToDevis={() => setCurrentTab('devis')}
+            initialFilter={sourcingFilter}
           />
         )}
 
@@ -297,6 +319,8 @@ const MainAppContent: React.FC = () => {
         onNewDevis={(c) => handleOpenNewDevis(c)}
         onSelectDevis={(d) => setSelectedDevisForDetail(d)}
         onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+        onSelectFacture={(f) => setSelectedFactureForDetail(f)}
+        onNavigateToTab={(tab) => setCurrentTab(tab)}
       />
 
       {/* Android Installation Modal */}

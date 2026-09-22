@@ -18,16 +18,24 @@ import { CommandeDetailModal } from './CommandeDetailModal';
 interface CommandesViewProps {
   onNewPaiement: (commande: Commande) => void;
   onViewFacture: (facture: Facture) => void;
+  initialFilter?: string | null;
 }
 
 export const CommandesView: React.FC<CommandesViewProps> = ({
   onNewPaiement,
   onViewFacture,
+  initialFilter,
 }) => {
   const { commandes, clients, parametres } = useApp();
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedStatut, setSelectedStatut] = useState<string>('all');
+  const [selectedStatut, setSelectedStatut] = useState<string>(initialFilter || 'all');
   const [selectedCommande, setSelectedCommande] = useState<Commande | null>(null);
+
+  React.useEffect(() => {
+    if (initialFilter) {
+      setSelectedStatut(initialFilter);
+    }
+  }, [initialFilter]);
 
   // Active commandes (not archived)
   const activeCommandes = commandes.filter((c) => !c.isArchived);
@@ -129,10 +137,10 @@ export const CommandesView: React.FC<CommandesViewProps> = ({
             <button
               key={st.id}
               onClick={() => setSelectedStatut(st.id)}
-              className={`px-3 py-1 rounded-lg font-semibold whitespace-nowrap transition-all ${
+              className={`px-3 py-1.5 rounded-xl font-semibold whitespace-nowrap transition-all ${
                 selectedStatut === st.id
                   ? 'bg-blue-600 text-white shadow-xs'
-                  : 'bg-white dark:bg-[#112238] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50'
+                  : 'bg-white dark:bg-[#112238] text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/60'
               }`}
             >
               {st.label}
@@ -143,14 +151,16 @@ export const CommandesView: React.FC<CommandesViewProps> = ({
 
       {/* Commandes List */}
       {filteredCommandes.length === 0 ? (
-        <div className="text-center py-12 bg-white dark:bg-[#112238] rounded-2xl border border-slate-200 dark:border-slate-800 p-6">
-          <Package className="w-10 h-10 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-          <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
+        <div className="text-center py-12 bg-white dark:bg-[#112238] rounded-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-2">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 flex items-center justify-center mx-auto text-slate-400">
+            <Package className="w-6 h-6" />
+          </div>
+          <p className="text-sm font-bold text-slate-800 dark:text-slate-200">
             {searchTerm || selectedStatut !== 'all'
               ? 'Aucune commande ne correspond aux critères'
               : 'Aucune commande enregistrée'}
           </p>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+          <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
             Les commandes sont générées en 1 clic par conversion d'un devis accepté.
           </p>
         </div>
@@ -162,23 +172,23 @@ export const CommandesView: React.FC<CommandesViewProps> = ({
               <div
                 key={cmd.id}
                 onClick={() => setSelectedCommande(cmd)}
-                className="bg-white dark:bg-[#112238] rounded-xl p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex items-center justify-between group"
+                className="bg-white dark:bg-[#112238] rounded-xl p-3.5 sm:p-4 border border-slate-200/80 dark:border-slate-800 shadow-xs hover:border-blue-400 cursor-pointer transition-all flex items-center justify-between gap-3 group"
               >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2">
+                <div className="space-y-1 min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-mono text-xs font-bold text-amber-600 dark:text-amber-400">
                       {cmd.numero}
                     </span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${getStatutBadge(cmd.statut)}`}>
+                    <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${getStatutBadge(cmd.statut)}`}>
                       {cmd.statut}
                     </span>
                   </div>
 
-                  <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 transition-colors">
+                  <h3 className="font-bold text-slate-900 dark:text-white text-sm group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors truncate">
                     {client?.nom || 'Client inconnu'}
                   </h3>
 
-                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2">
+                  <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-2 flex-wrap">
                     <span>{formatDate(cmd.date)}</span>
                     <span>•</span>
                     <span>{cmd.articles.length} article(s)</span>
@@ -193,9 +203,9 @@ export const CommandesView: React.FC<CommandesViewProps> = ({
                   </div>
                 </div>
 
-                <div className="flex items-center gap-3 text-right">
+                <div className="flex items-center gap-3 text-right shrink-0">
                   <div>
-                    <div className="text-sm font-bold font-mono text-slate-900 dark:text-white">
+                    <div className="text-sm sm:text-base font-bold font-mono text-slate-900 dark:text-white">
                       {formatCurrency(cmd.montantTotal, parametres.devise)}
                     </div>
                     <div className="text-[11px] font-semibold">

@@ -19,6 +19,15 @@ import {
   CreditCard,
   Building2,
   Lock,
+  ShieldCheck,
+  ArrowRight,
+  ArrowLeftRight,
+  Smartphone,
+  Laptop,
+  Info,
+  X,
+  AlertTriangle,
+  Check,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import {
@@ -42,6 +51,18 @@ interface GoogleSheetsViewProps {
   onNavigateTab?: (tab: any) => void;
 }
 
+interface ConfirmModalState {
+  isOpen: boolean;
+  operationType: 'create' | 'sync_all' | 'sync_entity';
+  title: string;
+  targetDescription: string;
+  directionBadge: string;
+  summaryItems: { label: string; count: number; icon: React.ComponentType<{ className?: string }> }[];
+  totalRecords: number;
+  securityGuarantee: string;
+  onConfirm: () => Promise<void>;
+}
+
 export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTab }) => {
   const {
     commandes,
@@ -53,6 +74,7 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
     parametres,
     updateParametres,
     logEvent,
+    syncState,
   } = useApp();
 
   // Auth state
@@ -78,17 +100,46 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
   const [syncErrorMsg, setSyncErrorMsg] = useState<string | null>(null);
   const [activeSheetTab, setActiveSheetTab] = useState<'sync' | 'select' | 'import'>('sync');
 
-  // Confirmation modal state for mutating operations (as required by Workspace Skill)
-  const [confirmModal, setConfirmModal] = useState<{
-    isOpen: boolean;
-    title: string;
-    message: string;
-    onConfirm: () => Promise<void>;
-  } | null>(null);
+  // Confirmation modal state for mutating operations (as required by Workspace Skill & Safety rules)
+  const [confirmModal, setConfirmModal] = useState<ConfirmModalState | null>(null);
 
   // Import preview state
   const [importResult, setImportResult] = useState<any[] | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+
+  // Helper for precise, informative errors with local data safety guarantee
+  const formatSheetsError = (err: any): string => {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      return "Erreur réseau : Votre appareil est actuellement hors connexion. Impossible de contacter les serveurs Google Sheets. Vos données locales NantorApp sont préservées et intactes.";
+    }
+    const raw = err?.message || String(err || '');
+    if (
+      raw.includes('Failed to fetch') ||
+      raw.includes('NetworkError') ||
+      raw.includes('Network request failed') ||
+      raw.includes('net::ERR') ||
+      raw.includes('Load failed') ||
+      raw.includes('timeout')
+    ) {
+      return "Erreur réseau : Impossible d'établir la communication avec les serveurs Google Sheets. Vérifiez votre connexion Internet. Vos données locales NantorApp sont préservées et intactes.";
+    }
+    if (
+      raw.includes('401') ||
+      raw.includes('invalid_token') ||
+      raw.includes('UNAUTHENTICATED') ||
+      raw.includes('expiré') ||
+      raw.includes('token expired')
+    ) {
+      return "Session Google expirée : Veuillez vous reconnecter avec votre compte Google ci-dessous pour renouveler l'autorisation d'accès. Vos données locales sont intactes.";
+    }
+    if (raw.includes('403') || raw.includes('PERMISSION_DENIED')) {
+      return "Autorisation refusée (403) : Votre compte Google n'a pas les droits d'écriture sur ce classeur Google Sheets. Vérifiez les droits de partage dans Google Drive. Vos données locales sont intactes.";
+    }
+    if (raw.includes('404') || raw.includes('NOT_FOUND')) {
+      return "Classeur introuvable (404) : Le classeur Google Sheets spécifié n'existe plus ou a été déplacé dans la corbeille de votre Google Drive. Vos données locales sont intactes.";
+    }
+    return `${raw} — Note : Vos données locales NantorApp sont préservées et intactes.`;
+  };
 
   // 1. Initialize Auth on Mount
   useEffect(() => {
@@ -174,17 +225,32 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
     return input.trim();
   };
 
-  // Create new dedicated sheet
+  // Create new dedicated sheet with mandatory confirmation
   const handleCreateNewSpreadsheet = async () => {
     if (!accessToken) {
       setAuthError('Veuillez vous connecter à votre compte Google pour créer un classeur.');
       return;
     }
 
+    const summaryItems = [
+      { label: 'Commandes & Logistique', count: commandes.length, icon: Package },
+      { label: 'Devis Sourcing', count: devis.length, icon: FileSpreadsheet },
+      { label: 'Demandes de Sourcing', count: sourcingList.length, icon: ShoppingBag },
+      { label: 'Répertoire Clients', count: clients.length, icon: Users },
+      { label: 'Fournisseurs Chine', count: fournisseurs.length, icon: Building2 },
+      { label: 'Règlements & Paiements', count: paiements.length, icon: CreditCard },
+    ];
+    const totalRecords = summaryItems.reduce((acc, it) => acc + it.count, 0);
+
     setConfirmModal({
       isOpen: true,
-      title: 'Créer un nouveau classeur Google Sheets ?',
-      message: `Cette action créera un classeur intitulé "Nantor Sourcing - Suivi Commandes & Sourcing (Togo-Chine)" dans votre Google Drive, avec 6 onglets prêts pour l'exportation.`,
+      operationType: 'create',
+      title: 'Créer un nouveau classeur Google Sheets dédié',
+      targetDescription: `Nouveau fichier dans votre Google Drive : "Nantor Sourcing - Suivi & Logistique" avec 6 onglets structurés`,
+      directionBadge: 'NantorApp → Google Sheets (Nouveau fichier)',
+      summaryItems,
+      totalRecords,
+      securityGuarantee: 'Vos données locales NantorApp sur cet appareil restent 100% intactes et conservées.',
       onConfirm: async () => {
         setIsSyncing(true);
         setSyncErrorMsg(null);
@@ -204,7 +270,7 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
           });
 
           // Perform initial sync into the newly created sheet
-          await syncAllDataToGoogleSheets(
+          const result = await syncAllDataToGoogleSheets(
             created.id,
             {
               commandes,
@@ -222,11 +288,13 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
             derniereSynchroSheetsDate: new Date().toISOString(),
           });
 
-          setSyncSuccessMsg('Nouveau classeur Google Sheets créé et synchronisé avec succès !');
+          setSyncSuccessMsg(
+            `Nouveau classeur Google Sheets créé et initialisé avec succès (${result.updatedSheetsCount} onglets, ${result.totalRowsCount} lignes écrites) ! Vos données locales sont préservées.`
+          );
           logEvent('Création Classeur Google Sheets', created.id, 'Système');
           fetchDriveSpreadsheets(accessToken);
         } catch (err: any) {
-          setSyncErrorMsg(err.message || 'Erreur lors de la création du classeur');
+          setSyncErrorMsg(formatSheetsError(err));
         } finally {
           setIsSyncing(false);
           setConfirmModal(null);
@@ -247,33 +315,40 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
       googleSheetsSpreadsheetId: cleanId,
       googleSheetsSpreadsheetUrl: finalUrl,
     });
-    setSyncSuccessMsg('Classeur Google Sheets relié avec succès.');
-    setTimeout(() => setSyncSuccessMsg(null), 3000);
+    setSyncSuccessMsg('Classeur Google Sheets relié avec succès. Vos données locales sont inchangées. Cliquez sur "Mettre à jour le Google Sheet" pour exporter vos données.');
+    setTimeout(() => setSyncSuccessMsg(null), 5000);
   };
 
-  // Full synchronization
+  // Full synchronization with mandatory confirmation
   const handleFullSync = async () => {
     if (!accessToken) {
-      setAuthError('Connexion Google requise pour synchroniser les données.');
+      setAuthError('Connexion Google requise pour exporter vers Google Sheets.');
       return;
     }
     if (!activeSpreadsheetId) {
-      setSyncErrorMsg('Veuillez créer ou sélectionner un classeur Google Sheets avant de synchroniser.');
+      setSyncErrorMsg('Veuillez créer ou sélectionner un classeur Google Sheets avant de lancer l’exportation.');
       return;
     }
 
-    const totalRecords =
-      commandes.length +
-      devis.length +
-      sourcingList.length +
-      clients.length +
-      fournisseurs.length +
-      paiements.length;
+    const summaryItems = [
+      { label: 'Commandes & Logistique', count: commandes.length, icon: Package },
+      { label: 'Devis Sourcing', count: devis.length, icon: FileSpreadsheet },
+      { label: 'Demandes de Sourcing', count: sourcingList.length, icon: ShoppingBag },
+      { label: 'Répertoire Clients', count: clients.length, icon: Users },
+      { label: 'Fournisseurs Chine', count: fournisseurs.length, icon: Building2 },
+      { label: 'Règlements & Paiements', count: paiements.length, icon: CreditCard },
+    ];
+    const totalRecords = summaryItems.reduce((acc, it) => acc + it.count, 0);
 
     setConfirmModal({
       isOpen: true,
-      title: 'Mettre à jour le classeur Google Sheets ?',
-      message: `Vous êtes sur le point d'écrire ${totalRecords} enregistrements (Commandes, Devis, Sourcing, Clients, Fournisseurs, Paiements) dans votre classeur Google Sheets distant. Les feuilles correspondantes seront actualisées avec les données les plus récentes.`,
+      operationType: 'sync_all',
+      title: 'Mettre à jour le classeur Google Sheets actif',
+      targetDescription: `Classeur Google Sheets distant (ID: ${activeSpreadsheetId.slice(0, 16)}...)`,
+      directionBadge: 'NantorApp → Google Sheets (Écriture tableur)',
+      summaryItems,
+      totalRecords,
+      securityGuarantee: 'Aucune donnée locale dans l’application (Android / PC) n’est modifiée ou écrasée. En cas de coupure réseau, vos données locales restent 100% préservées.',
       onConfirm: async () => {
         setIsSyncing(true);
         setSyncErrorMsg(null);
@@ -301,16 +376,16 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
           });
 
           setSyncSuccessMsg(
-            `Synchronisation réussie ! ${result.updatedSheetsCount} feuilles mises à jour (${result.totalRowsCount} lignes écrites).`
+            `Mise à jour Google Sheets réussie ! ${result.updatedSheetsCount} onglets actualisés (${result.totalRowsCount} lignes écrites). Vos données locales sont préservées.`
           );
           logEvent(
-            'Synchronisation Google Sheets réussie',
+            'Mise à jour Google Sheets réussie',
             `ID: ${activeSpreadsheetId}`,
             'Système',
             `${result.totalRowsCount} lignes écrites`
           );
         } catch (err: any) {
-          setSyncErrorMsg(err.message || 'Erreur lors de la synchronisation');
+          setSyncErrorMsg(formatSheetsError(err));
         } finally {
           setIsSyncing(false);
           setConfirmModal(null);
@@ -319,26 +394,35 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
     });
   };
 
-  // Single sheet sync
-  const handleSyncSingleEntity = async (entity: string, title: string) => {
+  // Single sheet sync with mandatory confirmation
+  const handleSyncSingleEntity = async (
+    entity: string,
+    title: string,
+    count: number,
+    IconComponent: React.ComponentType<{ className?: string }>
+  ) => {
     if (!accessToken) {
       setAuthError('Connexion Google requise.');
       return;
     }
     if (!activeSpreadsheetId) {
-      setSyncErrorMsg('Sélectionnez d’abord un classeur.');
+      setSyncErrorMsg('Sélectionnez d’abord un classeur Google Sheets.');
       return;
     }
 
     setConfirmModal({
       isOpen: true,
-      title: `Actualiser la feuille "${title}" dans Google Sheets ?`,
-      message: `Cette opération remplacera le contenu de l'onglet "${title}" par vos données locales actuelles.`,
+      operationType: 'sync_entity',
+      title: `Actualiser l'onglet "${title}" dans Google Sheets`,
+      targetDescription: `Onglet "${title}" du classeur Google Sheets distant`,
+      directionBadge: 'NantorApp → Google Sheets (Onglet unique)',
+      summaryItems: [{ label: title, count, icon: IconComponent }],
+      totalRecords: count,
+      securityGuarantee: 'Cette action écrit uniquement dans Google Sheets. Vos données locales dans NantorApp ne sont pas modifiées.',
       onConfirm: async () => {
         setIsSyncing(true);
         setSyncErrorMsg(null);
         try {
-          // Trigger targeted update
           await syncAllDataToGoogleSheets(
             activeSpreadsheetId,
             {
@@ -352,9 +436,11 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
             },
             accessToken
           );
-          setSyncSuccessMsg(`Feuille "${title}" actualisée avec succès dans Google Sheets !`);
+          setSyncSuccessMsg(
+            `Onglet "${title}" actualisé avec succès dans Google Sheets (${count} enregistrements écrits) ! Vos données locales sont intactes.`
+          );
         } catch (err: any) {
-          setSyncErrorMsg(err.message || 'Erreur lors de l’actualisation');
+          setSyncErrorMsg(formatSheetsError(err));
         } finally {
           setIsSyncing(false);
           setConfirmModal(null);
@@ -371,7 +457,7 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
       const rows = await readSheetValues(activeSpreadsheetId, "'Commandes'!A1:L20", accessToken);
       setImportResult(rows);
     } catch (err: any) {
-      setSyncErrorMsg(`Impossible de lire la feuille : ${err.message}`);
+      setSyncErrorMsg(formatSheetsError(err));
     } finally {
       setIsImporting(false);
     }
@@ -388,14 +474,14 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
           <div>
             <div className="flex items-center gap-2">
               <h2 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white">
-                Intégration Google Sheets & Drive
+                Google Sheets & Drive
               </h2>
               <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-800">
-                Officiel V3
+                NantorApp → Sheets
               </span>
             </div>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Synchronisation bidirectionnelle en temps réel, création de classeurs automatisés et exports vers votre compte Google personnel.
+              Exportez et actualisez un tableur miroir dans votre compte Google Drive personnel. Ce module est distinct de la Synchronisation Cloud multi-appareils (Android ↔ Ordinateur).
             </p>
           </div>
         </div>
@@ -414,18 +500,136 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
         )}
       </div>
 
+      {/* CLARIFICATION BANNER: CLOUD SYNC VS GOOGLE SHEETS */}
+      <div className="bg-gradient-to-br from-blue-50/80 via-indigo-50/50 to-emerald-50/80 dark:from-blue-950/40 dark:via-indigo-950/30 dark:to-emerald-950/40 border border-blue-200/80 dark:border-blue-800/60 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-2xs">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 rounded-lg bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
+              <Info className="w-3.5 h-3.5" />
+            </div>
+            <h3 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white uppercase tracking-wider">
+              Comprendre les 2 modes de synchronisation de NantorApp
+            </h3>
+          </div>
+          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest hidden sm:inline">
+            Systèmes indépendants
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+          {/* System 1: Cloud Sync NantorApp */}
+          <div className="bg-white/90 dark:bg-[#0c1626]/90 p-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 space-y-2 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Cloud className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                    1. Synchronisation Cloud NantorApp
+                  </h4>
+                  <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                    <Smartphone className="w-3 h-3" />
+                    <span>Android ↔ Ordinateur</span>
+                    <Laptop className="w-3 h-3" />
+                    <span className="text-slate-400 font-normal">• Temps réel</span>
+                  </span>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                Multi-appareils
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+              Réplique en continu votre base de données entre votre smartphone et votre PC. Si vous ajoutez ou modifiez un client sur Android, il apparaît immédiatement sur votre ordinateur.
+            </p>
+            <div className="pt-1 flex items-center justify-between text-[11px] border-t border-slate-100 dark:border-slate-800/80">
+              <span className="text-slate-500 font-mono text-[10px]">
+                Statut : {syncState === 'synced' ? '🟢 Synchronisé' : syncState === 'offline' ? '⚪ Hors connexion' : '🟡 En attente'}
+              </span>
+              {onNavigateTab && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateTab('parametres')}
+                  className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer inline-flex items-center gap-1 text-[11px]"
+                >
+                  Gérer le Cloud <ExternalLink className="w-3 h-3" />
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* System 2: Google Sheets */}
+          <div className="bg-white/90 dark:bg-[#0c1626]/90 p-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 space-y-2 shadow-2xs">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-4 h-4" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">
+                    2. Google Sheets & Drive (Ici)
+                  </h4>
+                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                    <span>NantorApp → Google Sheets</span>
+                    <span className="text-slate-400 font-normal">• Tableur miroir</span>
+                  </span>
+                </div>
+              </div>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                Export Google
+              </span>
+            </div>
+            <p className="text-[11px] text-slate-600 dark:text-slate-300 leading-relaxed">
+              Exporte vos données dans un tableur Google Sheets sur votre Drive pour consultation externe, impression, reporting comptable ou partage avec un collaborateur.
+            </p>
+            <div className="pt-1 flex items-center justify-between text-[11px] border-t border-slate-100 dark:border-slate-800/80">
+              <span className="text-emerald-700 dark:text-emerald-400 font-semibold text-[10px]">
+                {activeSpreadsheetId ? '✓ Classeur relié' : 'Aucun classeur lié'}
+              </span>
+              <span className="text-slate-500 dark:text-slate-400 text-[10px] font-medium flex items-center gap-1">
+                <ShieldCheck className="w-3 h-3 text-emerald-600" /> Données locales 100% sécurisées
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Messages */}
       {syncSuccessMsg && (
-        <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300 flex items-center gap-2.5 text-xs font-semibold animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span>{syncSuccessMsg}</span>
+        <div className="p-4 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-900/60 text-emerald-800 dark:text-emerald-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-semibold animate-fade-in shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{syncSuccessMsg}</span>
+          </div>
+          {activeSpreadsheetUrl && (
+            <a
+              href={activeSpreadsheetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shrink-0"
+            >
+              <ExternalLink className="w-3 h-3" />
+              Ouvrir le classeur
+            </a>
+          )}
         </div>
       )}
 
       {syncErrorMsg && (
-        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300 flex items-center gap-2.5 text-xs font-semibold animate-fade-in">
-          <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
-          <span>{syncErrorMsg}</span>
+        <div className="p-4 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 text-rose-800 dark:text-rose-300 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-semibold animate-fade-in shadow-2xs">
+          <div className="flex items-center gap-2.5">
+            <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+            <div className="space-y-0.5">
+              <span>{syncErrorMsg}</span>
+              <p className="text-[10px] font-normal text-rose-600 dark:text-rose-400">
+                Vos données locales dans NantorApp n'ont pas été affectées.
+              </p>
+            </div>
+          </div>
+          <span className="px-2 py-0.5 rounded-md bg-white/80 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-[10px] font-bold shrink-0 self-start sm:self-auto border border-rose-300 dark:border-rose-800">
+            Données locales intactes
+          </span>
         </div>
       )}
 
@@ -528,36 +732,36 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
 
       {/* 2. CONFIGURATION DU CLASSEUR ACTIF */}
       <div className="bg-white dark:bg-[#112238] p-5 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-4">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white text-sm">
               Classeur Google Sheets actif
             </h3>
             <p className="text-slate-500 dark:text-slate-400 text-xs">
-              Définissez la feuille de calcul vers laquelle toutes les commandes, devis et clients sont envoyés.
+              Feuille de calcul miroir vers laquelle vos données locales NantorApp sont exportées.
             </p>
           </div>
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-1.5 sm:gap-2">
             <button
               onClick={() => setActiveSheetTab('sync')}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${
                 activeSheetTab === 'sync'
                   ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
-              Synchronisation
+              1. Exporter vers Sheets
             </button>
             <button
               onClick={() => setActiveSheetTab('select')}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${
                 activeSheetTab === 'select'
                   ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
-              Choisir / Lier
+              2. Choisir / Lier
             </button>
             <button
               onClick={() => {
@@ -567,10 +771,10 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
               className={`px-3 py-1.5 rounded-xl text-xs font-bold cursor-pointer transition-all ${
                 activeSheetTab === 'import'
                   ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
-              Consulter en direct
+              3. Consulter en direct
             </button>
           </div>
         </div>
@@ -617,7 +821,7 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
                 className="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer disabled:opacity-50"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                {isSyncing ? 'Synchronisation...' : 'Synchroniser tout'}
+                {isSyncing ? 'Exportation en cours...' : 'Tout exporter vers Sheets'}
               </button>
             )}
           </div>
@@ -626,9 +830,14 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
         {/* TAB 1: SYNCHRONISATION & PER-ENTITY EXPORTS */}
         {activeSheetTab === 'sync' && (
           <div className="space-y-4 pt-2">
-            <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs">
-              Synchronisation par module vers Google Sheets
-            </h4>
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                Export sélectif par module (NantorApp → Google Sheets)
+              </h4>
+              <span className="text-[10px] text-slate-400 font-medium">
+                Chaque bouton met à jour un seul onglet distant
+              </span>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {[
                 {
@@ -705,12 +914,12 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
 
                     <button
                       type="button"
-                      onClick={() => handleSyncSingleEntity(m.id, m.title)}
+                      onClick={() => handleSyncSingleEntity(m.id, m.title, m.count, IconComponent)}
                       disabled={isSyncing || !googleUser || !activeSpreadsheetId}
                       className="w-full py-2 px-3 bg-white dark:bg-slate-800 hover:bg-slate-100 border border-slate-300 dark:border-slate-700 text-slate-800 dark:text-white rounded-lg font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer disabled:opacity-50"
                     >
                       <RefreshCw className="w-3 h-3 text-emerald-600" />
-                      Mettre à jour cette feuille
+                      Exporter vers l'onglet
                     </button>
                   </div>
                 );
@@ -899,35 +1108,112 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
 
       {/* CONFIRMATION MODAL FOR DESTRUCTIVE / MUTATING OPERATIONS (MANDATORY per Workspace Skill) */}
       {confirmModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white dark:bg-[#112238] rounded-2xl max-w-md w-full p-6 border border-slate-200 dark:border-slate-800 shadow-xl space-y-4 animate-scale-in">
-            <div className="flex items-center gap-3 text-amber-600">
-              <div className="p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50">
-                <AlertCircle className="w-6 h-6" />
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-fade-in">
+          <div className="bg-white dark:bg-[#112238] rounded-2xl max-w-lg w-full p-5 sm:p-6 border border-slate-200 dark:border-slate-800 shadow-2xl space-y-4 animate-scale-in">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <FileSpreadsheet className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base">
+                    {confirmModal.title}
+                  </h3>
+                  <div className="inline-flex items-center gap-1.5 mt-0.5 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
+                    <span>{confirmModal.directionBadge}</span>
+                  </div>
+                </div>
               </div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-base">
-                {confirmModal.title}
-              </h3>
-            </div>
-
-            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-              {confirmModal.message}
-            </p>
-
-            <div className="pt-2 flex justify-end gap-2 text-xs">
               <button
                 type="button"
                 onClick={() => setConfirmModal(null)}
-                className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold hover:bg-slate-200 cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 cursor-pointer"
+                title="Fermer"
               >
-                Annuler
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Target Description */}
+            <div className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 text-xs">
+              <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400 block mb-0.5">
+                Cible de l'opération
+              </span>
+              <p className="font-medium text-slate-700 dark:text-slate-300">
+                {confirmModal.targetDescription}
+              </p>
+            </div>
+
+            {/* Transferred Data Inventory */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                <span>Données à envoyer :</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-mono">
+                  {confirmModal.totalRecords} enregistrement(s)
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {confirmModal.summaryItems.map((item, idx) => {
+                  const Icon = item.icon;
+                  return (
+                    <div
+                      key={idx}
+                      className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 flex items-center justify-between"
+                    >
+                      <div className="flex items-center gap-2 truncate">
+                        <Icon className="w-3.5 h-3.5 text-slate-500 shrink-0" />
+                        <span className="text-slate-700 dark:text-slate-300 font-medium truncate text-[11px]">
+                          {item.label}
+                        </span>
+                      </div>
+                      <span className="font-mono font-bold text-slate-900 dark:text-white text-[11px] ml-1">
+                        {item.count}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Security Guarantee Banner */}
+            <div className="p-3 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900/60 text-blue-900 dark:text-blue-300 flex items-start gap-2.5 text-xs">
+              <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <span className="font-bold block">Garantie de sécurité locale</span>
+                <p className="text-[11px] leading-relaxed text-blue-800 dark:text-blue-200">
+                  {confirmModal.securityGuarantee}
+                </p>
+              </div>
+            </div>
+
+            {/* Action Buttons */}
+            <div className="pt-2 flex flex-col-reverse sm:flex-row items-center justify-end gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setConfirmModal(null)}
+                disabled={isSyncing}
+                className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold transition-all cursor-pointer text-center"
+              >
+                Annuler (Ne rien modifier)
               </button>
               <button
                 type="button"
                 onClick={confirmModal.onConfirm}
-                className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold cursor-pointer shadow-xs"
+                disabled={isSyncing}
+                className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold transition-all cursor-pointer shadow-xs flex items-center justify-center gap-2"
               >
-                Confirmer l'opération
+                {isSyncing ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>Envoi en cours...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Confirmer l'export vers Sheets</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
