@@ -48,6 +48,7 @@ import {
 import { Devis, Commande } from '../types';
 import { GoogleSheetsView } from './GoogleSheetsView';
 import { CloudSyncView } from './CloudSyncView';
+import { APP_VERSION, BUILD_TIME } from '../pwaUpdate';
 
 interface ParametresViewProps {
   initialTab?: 'sync' | 'apparence' | 'notifications' | 'apk' | 'entreprise' | 'securite' | 'backup' | 'gdrive' | 'sheets' | 'exports' | 'archives' | 'tests';
@@ -2230,6 +2231,13 @@ npx cap run android
           )}
         </div>
       )}
+
+      {/* Indicateur technique de version pour diagnostic de mise à jour PWA */}
+      <div className="pt-6 pb-2 text-center border-t border-slate-200/80 dark:border-neutral-800">
+        <p className="text-[11px] text-slate-400 dark:text-neutral-500 font-mono tracking-tight">
+          Nantor Sourcing App • v{APP_VERSION} • Build {BUILD_TIME.slice(0, 10)} • PWA GitHub Pages (/instan/)
+        </p>
+      </div>
     </div>
   );
 };
