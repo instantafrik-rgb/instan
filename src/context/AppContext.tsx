@@ -177,7 +177,7 @@ interface AppContextType {
   downloadAllFromCloud: () => Promise<{ success: boolean; message: string }>;
   clearOfflinePendingQueue: () => void;
   currentAuthUser: User | null;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: (options?: { forceRedirect?: boolean }) => Promise<void>;
   signOutGoogle: () => Promise<void>;
 
   // Rentabilité
@@ -2303,9 +2303,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentAuthUser?.uid]);
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogle = async (options?: { forceRedirect?: boolean }) => {
     try {
-      const res = await googleSignIn();
+      const res = await googleSignIn(options);
       if (res?.user) {
         setCurrentAuthUser(res.user);
         showToast(`Connecté avec Google : ${res.user.email || res.user.displayName || 'Compte Google'}`, 'success');
@@ -2313,6 +2313,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await syncNow(res.user.uid);
       }
     } catch (err: any) {
+      if (err?.code === 'auth/popup-closed-by-user') {
+        console.info('[GoogleAuth] Fenêtre fermée par l\'utilisateur avant sélection du compte.');
+        showToast('Connexion interrompue : fenêtre Google fermée avant sélection du compte.', 'info');
+        return;
+      }
       const friendlyMessage = formatAuthErrorMessage(err);
       console.error('[GoogleAuth] Échec connexion Google:', err);
       showToast(`Échec de connexion Google : ${friendlyMessage}`, 'error');

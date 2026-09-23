@@ -73,9 +73,9 @@ export function formatAuthErrorMessage(error: any): string {
     case 'auth/popup-blocked':
       return 'La fenêtre de connexion Google a été bloquée par votre navigateur. Autorisez les popups pour ce site ou utilisez la redirection.';
     case 'auth/popup-closed-by-user':
-      return 'La fenêtre de connexion Google a été fermée avant la validation. Veuillez réessayer.';
+      return 'La fenêtre de connexion Google a été fermée avant la sélection du compte. Cliquez à nouveau sur "Connecter avec Google" pour vous identifier.';
     case 'auth/cancelled-popup-request':
-      return 'Une tentative de connexion Google est déjà en cours dans une autre fenêtre.';
+      return 'Une tentative de connexion Google est déjà en cours dans une autre fenêtre ou a été interrompue. Veuillez réessayer.';
     case 'auth/invalid-api-key':
       return 'La clé API Firebase est invalide ou restreinte dans Google Cloud Console.';
     case 'auth/invalid-oauth-client-id':

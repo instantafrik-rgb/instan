@@ -36,6 +36,7 @@ import {
   googleLogout,
   getAccessToken,
   getCurrentGoogleUser,
+  formatAuthErrorMessage,
 } from '../utils/googleAuth';
 import {
   createDedicatedSpreadsheet,
@@ -202,7 +203,11 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
       logEvent('Connexion Google Workspace réussie', user.email || 'Compte Google', 'Système');
       fetchDriveSpreadsheets(token);
     } catch (err: any) {
-      setAuthError(err.message || 'Échec de la connexion à Google');
+      if (err?.code === 'auth/popup-closed-by-user') {
+        setAuthError('La fenêtre Google a été fermée avant la sélection du compte. Cliquez sur "Connecter avec Google" pour vous reconnecter.');
+      } else {
+        setAuthError(formatAuthErrorMessage(err));
+      }
     } finally {
       setIsAuthenticating(false);
     }
