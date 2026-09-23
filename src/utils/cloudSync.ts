@@ -319,10 +319,18 @@ export async function fetchAllCollectionsFromCloud(targetUserId?: string): Promi
   sourcingList: Sourcing[];
   rentabilites: Record<string, Rentabilite>;
 } | null> {
-  if (!navigator.onLine) return null;
+  if (!navigator.onLine) {
+    console.log('[CloudSync] fetchAllCollectionsFromCloud annulé : appareil hors ligne');
+    return null;
+  }
 
   const userId = targetUserId || getCurrentUserId();
-  if (!userId) return null;
+  if (!userId) {
+    console.log('[CloudSync] fetchAllCollectionsFromCloud annulé : aucun UID Firebase');
+    return null;
+  }
+
+  console.log(`[CloudSync] Début récupération collections Cloud sous /users/${userId}/...`);
 
   try {
     const results: any = {};
@@ -343,6 +351,10 @@ export async function fetchAllCollectionsFromCloud(targetUserId?: string): Promi
       });
     }
 
+    const totalFetched = (results.clients?.length || 0) + (results.devis?.length || 0) + (results.commandes?.length || 0) + (results.factures?.length || 0) + (results.paiements?.length || 0) + (results.fournisseurs?.length || 0) + (results.sourcing?.length || 0) + Object.keys(rentabilitesMap).length;
+
+    console.log(`[CloudSync] Succès récupération Cloud pour ${userId} : ${totalFetched} éléments récupérés`);
+
     return {
       clients: results.clients || [],
       devis: results.devis || [],
@@ -353,8 +365,8 @@ export async function fetchAllCollectionsFromCloud(targetUserId?: string): Promi
       sourcingList: results.sourcing || [],
       rentabilites: rentabilitesMap,
     };
-  } catch (error) {
-    console.error('[CloudSync] Erreur téléchargement données utilisateur Firestore:', error);
+  } catch (error: any) {
+    console.error(`[CloudSync] Erreur récupération Firestore pour l'UID ${userId}:`, error?.code, error?.message);
     return null;
   }
 }
@@ -374,13 +386,17 @@ export async function pushAllLocalDataToCloud(
   targetUserId?: string
 ): Promise<{ success: boolean; totalUploaded: number; error?: string }> {
   if (!navigator.onLine) {
+    console.warn('[CloudSync] pushAllLocalDataToCloud annulé : appareil hors ligne');
     return { success: false, totalUploaded: 0, error: 'Appareil hors ligne' };
   }
 
   const userId = targetUserId || getCurrentUserId();
   if (!userId) {
-    return { success: false, totalUploaded: 0, error: 'Utilisateur non authentifié' };
+    console.warn('[CloudSync] pushAllLocalDataToCloud annulé : utilisateur non authentifié (aucun UID Firebase)');
+    return { success: false, totalUploaded: 0, error: 'Utilisateur non authentifié (aucun UID Firebase)' };
   }
+
+  console.log(`[CloudSync] Début envoi complet des données locales vers Firestore sous /users/${userId}/...`);
 
   try {
     let totalUploaded = 0;
@@ -428,9 +444,10 @@ export async function pushAllLocalDataToCloud(
     }, { merge: true });
 
     localStorage.setItem(STORAGE_KEYS.LAST_SYNC, now);
+    console.log(`[CloudSync] Succès envoi complet vers Firestore : ${totalUploaded} éléments synchronisés sous /users/${userId}/`);
     return { success: true, totalUploaded };
   } catch (e: any) {
-    console.error('[CloudSync] Erreur export complet vers Firestore:', e);
+    console.error(`[CloudSync] Erreur envoi vers Firestore sous /users/${userId}/:`, e?.code, e?.message);
     return { success: false, totalUploaded: 0, error: e?.message || 'Erreur inconnue' };
   }
 }

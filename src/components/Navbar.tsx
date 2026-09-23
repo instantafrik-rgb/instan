@@ -122,59 +122,74 @@ export const Navbar: React.FC<NavbarProps> = ({
       >
         {/* Micro bandeau de statut Android / PWA - compact et responsive */}
         <div className="flex items-center justify-between px-3 sm:px-4 py-1 text-[11px] text-neutral-500 dark:text-neutral-400 font-mono border-b border-neutral-100 dark:border-neutral-800/80 bg-neutral-50 dark:bg-[#080b12]">
-          <button
-            id="status-sync-btn"
-            onClick={() => syncNow()}
-            className="flex items-center gap-1.5 cursor-pointer hover:opacity-85 active:scale-98 transition py-0.5"
-            title={`Cliquez pour forcer la synchronisation. Dernière synchronisation : ${
-              syncStats?.lastSyncTime ? new Date(syncStats.lastSyncTime).toLocaleString('fr-FR') : 'Non renseignée'
-            }`}
-          >
-            {syncState === 'synced' && (
-              <>
-                <span className="text-[10px]">🟢</span>
-                <span className="font-semibold text-emerald-700 dark:text-emerald-400">
-                  Cloud NantorApp
-                  <span className="hidden sm:inline"> (Android ↔ PC) • Synchronisé</span>
-                </span>
-              </>
-            )}
-            {syncState === 'pending' && (
-              <>
-                <span className="text-[10px]">🟡</span>
-                <span className="font-semibold text-amber-700 dark:text-amber-400">
-                  En attente ({syncStats?.pendingOfflineQueue || 1})
-                  <span className="hidden sm:inline"> • Synchro cloud différée</span>
-                </span>
-              </>
-            )}
-            {syncState === 'syncing' && (
-              <>
-                <span className="text-[10px] animate-spin">🔄</span>
-                <span className="font-semibold text-blue-700 dark:text-blue-400">
-                  Synchronisation...
-                </span>
-              </>
-            )}
-            {syncState === 'error' && (
-              <>
-                <span className="text-[10px]">🔴</span>
-                <span className="font-semibold text-rose-700 dark:text-rose-400 underline decoration-rose-400 underline-offset-2">
-                  Erreur synchro
-                  <span className="hidden sm:inline"> — Réessayer</span>
-                </span>
-              </>
-            )}
-            {syncState === 'offline' && (
-              <>
-                <span className="text-[10px]">⚪</span>
-                <span className="font-semibold text-neutral-600 dark:text-neutral-400">
-                  Hors connexion
-                  <span className="hidden sm:inline"> • Données locales</span>
-                </span>
-              </>
-            )}
-          </button>
+          {!syncStats?.isGoogleConnected ? (
+            <button
+              id="status-sync-btn"
+              onClick={() => setCurrentTab('parametres')}
+              className="flex items-center gap-1.5 cursor-pointer hover:opacity-85 active:scale-98 transition py-0.5 text-neutral-600 dark:text-neutral-400"
+              title="Cloud non connecté. Cliquez pour connecter un compte Google et activer la synchronisation multi-appareils."
+            >
+              <span className="text-[11px]">☁️</span>
+              <span className="font-semibold text-neutral-700 dark:text-neutral-300">
+                Cloud non connecté
+                <span className="hidden sm:inline font-normal text-neutral-500 dark:text-neutral-400"> • Données locales sécurisées</span>
+              </span>
+            </button>
+          ) : (
+            <button
+              id="status-sync-btn"
+              onClick={() => syncNow()}
+              className="flex items-center gap-1.5 cursor-pointer hover:opacity-85 active:scale-98 transition py-0.5"
+              title={`Cliquez pour forcer la synchronisation. Dernière synchronisation : ${
+                syncStats?.lastSyncTime ? new Date(syncStats.lastSyncTime).toLocaleString('fr-FR') : 'Non renseignée'
+              }`}
+            >
+              {syncState === 'synced' && (
+                <>
+                  <span className="text-[10px]">🟢</span>
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-400">
+                    Cloud connecté
+                    <span className="hidden sm:inline"> • Synchronisé</span>
+                  </span>
+                </>
+              )}
+              {syncState === 'pending' && (
+                <>
+                  <span className="text-[10px]">🟡</span>
+                  <span className="font-semibold text-amber-700 dark:text-amber-400">
+                    Cloud connecté
+                    <span className="hidden sm:inline"> • En attente ({syncStats?.pendingOfflineQueue || 1})</span>
+                  </span>
+                </>
+              )}
+              {syncState === 'syncing' && (
+                <>
+                  <span className="text-[10px] animate-spin">🔄</span>
+                  <span className="font-semibold text-blue-700 dark:text-blue-400">
+                    Synchronisation en cours...
+                  </span>
+                </>
+              )}
+              {syncState === 'error' && (
+                <>
+                  <span className="text-[10px]">🔴</span>
+                  <span className="font-semibold text-rose-700 dark:text-rose-400 underline decoration-rose-400 underline-offset-2">
+                    Erreur de synchronisation
+                    <span className="hidden sm:inline"> — Réessayer</span>
+                  </span>
+                </>
+              )}
+              {syncState === 'offline' && (
+                <>
+                  <span className="text-[10px]">⚪</span>
+                  <span className="font-semibold text-neutral-600 dark:text-neutral-400">
+                    Hors connexion
+                    <span className="hidden sm:inline"> • Données locales</span>
+                  </span>
+                </>
+              )}
+            </button>
+          )}
 
           <div className="flex items-center gap-2 sm:gap-3 shrink-0">
             {formattedLastSync && (

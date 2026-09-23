@@ -40,7 +40,8 @@ import {
   googleLogout,
   getCurrentGoogleUser,
   onAuthUserChanged,
-  ensureAuthenticated,
+  handleRedirectResult,
+  formatAuthErrorMessage,
 } from '../utils/googleAuth';
 import type { User } from 'firebase/auth';
 import {
@@ -2213,17 +2214,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     localStorage.getItem('nantor_v4_sync_last_time') || new Date().toISOString()
   );
 
-  // Maintain Firebase Auth state listener and proactively authenticate if online
+  // Maintain Firebase Auth state listener and handle redirect result
   useEffect(() => {
+    // Check if returning from OAuth redirect flow (e.g. on mobile/Android PWA)
+    handleRedirectResult()
+      .then((res) => {
+        if (res?.user) {
+          setCurrentAuthUser(res.user);
+          showToast(`Connecté avec Google : ${res.user.email || res.user.displayName}`, 'success');
+          syncNow(res.user.uid);
+        }
+      })
+      .catch((err) => {
+        const errorMsg = formatAuthErrorMessage(err);
+        console.error('[GoogleAuth] Erreur retour de redirection Google:', err);
+        showToast(`Échec connexion Google : ${errorMsg}`, 'error');
+      });
+
     const unsubscribe = onAuthUserChanged((user) => {
       setCurrentAuthUser(user);
     });
-
-    if (navigator.onLine && !auth.currentUser) {
-      ensureAuthenticated().then((user) => {
-        if (user) setCurrentAuthUser(user);
-      });
-    }
 
     return () => {
       unsubscribe();
@@ -2296,12 +2306,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const signInWithGoogle = async () => {
     try {
       const res = await googleSignIn();
-      setCurrentAuthUser(res.user);
-      showToast(`Connecté avec Google : ${res.user.email || res.user.displayName}`, 'success');
-      // Proactively synchronize user data
-      await syncNow();
+      if (res?.user) {
+        setCurrentAuthUser(res.user);
+        showToast(`Connecté avec Google : ${res.user.email || res.user.displayName || 'Compte Google'}`, 'success');
+        // Synchroniser immédiatement les données de l'utilisateur
+        await syncNow(res.user.uid);
+      }
     } catch (err: any) {
-      showToast(`Échec de connexion Google : ${err?.message || 'Erreur inconnue'}`, 'error');
+      const friendlyMessage = formatAuthErrorMessage(err);
+      console.error('[GoogleAuth] Échec connexion Google:', err);
+      showToast(`Échec de connexion Google : ${friendlyMessage}`, 'error');
     }
   };
 
@@ -2328,20 +2342,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       lastSyncTime: syncLastTime,
       lastError: lastSyncError,
       userId: currentAuthUser?.uid,
-      userEmail: currentAuthUser?.email || (currentAuthUser?.isAnonymous ? 'Session anonyme sécurisée' : undefined),
+      userEmail: currentAuthUser?.email || (currentAuthUser?.isAnonymous ? 'Session anonyme' : undefined),
       isGoogleConnected: Boolean(currentAuthUser && !currentAuthUser.isAnonymous),
     };
   }, [clients, devis, commandes, factures, paiements, fournisseurs, sourcingList, offlinePendingCount, syncLastTime, lastSyncError, currentAuthUser]);
 
-  // Helper to ensure an active UID
-  const getActiveUserId = async (): Promise<string | undefined> => {
-    if (currentAuthUser?.uid) return currentAuthUser.uid;
-    const authed = await ensureAuthenticated();
-    if (authed) {
-      setCurrentAuthUser(authed);
-      return authed.uid;
-    }
-    return undefined;
+  // Helper pour récupérer l'UID actif de l'utilisateur authentifié
+  const getActiveUserId = (): string | undefined => {
+    return currentAuthUser?.uid || auth.currentUser?.uid || undefined;
   };
 
   // Flush pending offline queue whenever coming online
@@ -2349,15 +2357,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const handleOnline = async () => {
       setSyncState('syncing');
       setLastSyncError(null);
-      const userId = await getActiveUserId();
-      const res = await flushOfflineQueue(userId);
-      const qLen = getOfflineQueue().length;
-      setOfflinePendingCount(qLen);
-      if (res.success) {
-        setSyncState('synced');
-        showToast('Connexion rétablie : file hors ligne synchronisée avec succès.', 'success');
+      const userId = getActiveUserId();
+      if (userId) {
+        const res = await flushOfflineQueue(userId);
+        const qLen = getOfflineQueue().length;
+        setOfflinePendingCount(qLen);
+        if (res.success) {
+          setSyncState('synced');
+          showToast('Connexion rétablie : file hors ligne synchronisée avec succès.', 'success');
+        } else {
+          setSyncState(qLen > 0 ? 'pending' : 'synced');
+        }
       } else {
-        setSyncState(qLen > 0 ? 'pending' : 'synced');
+        setSyncState('synced');
       }
     };
 
@@ -2380,63 +2392,108 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [currentAuthUser]);
 
-  const syncNow = async (): Promise<{ success: boolean; message: string }> => {
+  const syncNow = async (targetUserId?: string): Promise<{ success: boolean; message: string }> => {
     if (!navigator.onLine) {
       setSyncState('offline');
       setLastSyncError('Appareil hors ligne');
-      return { success: false, message: 'Appareil hors ligne. Connexion requise.' };
+      return { success: false, message: 'Appareil hors ligne. Connexion Internet requise.' };
+    }
+
+    const userId = targetUserId || getActiveUserId();
+    if (!userId) {
+      return {
+        success: false,
+        message: 'Aucun compte Google connecté. Connectez-vous avec Google pour activer la synchronisation Cloud.',
+      };
     }
 
     try {
       setSyncState('syncing');
       setLastSyncError(null);
-      const userId = await getActiveUserId();
+      console.log(`[CloudSync] Début synchronisation Firestore pour UID: ${userId}`);
 
-      // 1. Flush offline queue first
+      // 1. Vider la file d'attente hors ligne
       await flushOfflineQueue(userId);
       const qLen = getOfflineQueue().length;
       setOfflinePendingCount(qLen);
 
-      // 2. Fetch latest updates from cloud
+      // 2. Récupérer les données Cloud sous /users/{userId}/...
       const cloudData = await fetchAllCollectionsFromCloud(userId);
       if (cloudData) {
-        // Merge without wiping local data
-        if (cloudData.clients.length > 0) {
-          setClients((prev) => mergeCollectionEntities(prev, cloudData.clients));
+        const totalCloudItems =
+          cloudData.clients.length +
+          cloudData.devis.length +
+          cloudData.commandes.length +
+          cloudData.factures.length +
+          cloudData.paiements.length +
+          cloudData.fournisseurs.length +
+          cloudData.sourcingList.length +
+          Object.keys(cloudData.rentabilites).length;
+
+        const totalLocalItems =
+          clients.length +
+          devis.length +
+          commandes.length +
+          factures.length +
+          paiements.length +
+          fournisseurs.length +
+          sourcingList.length +
+          Object.keys(rentabilites).length;
+
+        // Protection & Première synchronisation :
+        // Si le Cloud est vide pour cet utilisateur et que des données locales existent,
+        // envoyer les données locales vers le Cloud sans les écraser !
+        if (totalCloudItems === 0 && totalLocalItems > 0) {
+          console.log(`[CloudSync] Première synchronisation : Cloud vide. Sauvegarde des ${totalLocalItems} données locales sous /users/${userId}/...`);
+          await pushAllLocalDataToCloud({
+            clients,
+            devis,
+            commandes,
+            factures,
+            paiements,
+            fournisseurs,
+            sourcingList,
+            rentabilites,
+          }, userId);
+        } else {
+          // Fusion intelligente non destructive
+          if (cloudData.clients.length > 0) {
+            setClients((prev) => mergeCollectionEntities(prev, cloudData.clients));
+          }
+          if (cloudData.devis.length > 0) {
+            setDevis((prev) => mergeCollectionEntities(prev, cloudData.devis));
+          }
+          if (cloudData.commandes.length > 0) {
+            setCommandes((prev) => mergeCollectionEntities(prev, cloudData.commandes));
+          }
+          if (cloudData.factures.length > 0) {
+            setFactures((prev) => mergeCollectionEntities(prev, cloudData.factures));
+          }
+          if (cloudData.paiements.length > 0) {
+            setPaiements((prev) => mergeCollectionEntities(prev, cloudData.paiements));
+          }
+          if (cloudData.fournisseurs.length > 0) {
+            setFournisseurs((prev) => mergeCollectionEntities(prev, cloudData.fournisseurs));
+          }
+          if (cloudData.sourcingList.length > 0) {
+            setSourcingList((prev) => mergeCollectionEntities(prev, cloudData.sourcingList));
+          }
+          if (Object.keys(cloudData.rentabilites).length > 0) {
+            setRentabilites((prev) => ({ ...prev, ...cloudData.rentabilites }));
+          }
+
+          // Envoi miroir des données locales vers Firestore pour garantir la cohérence
+          await pushAllLocalDataToCloud({
+            clients,
+            devis,
+            commandes,
+            factures,
+            paiements,
+            fournisseurs,
+            sourcingList,
+            rentabilites,
+          }, userId);
         }
-        if (cloudData.devis.length > 0) {
-          setDevis((prev) => mergeCollectionEntities(prev, cloudData.devis));
-        }
-        if (cloudData.commandes.length > 0) {
-          setCommandes((prev) => mergeCollectionEntities(prev, cloudData.commandes));
-        }
-        if (cloudData.factures.length > 0) {
-          setFactures((prev) => mergeCollectionEntities(prev, cloudData.factures));
-        }
-        if (cloudData.paiements.length > 0) {
-          setPaiements((prev) => mergeCollectionEntities(prev, cloudData.paiements));
-        }
-        if (cloudData.fournisseurs.length > 0) {
-          setFournisseurs((prev) => mergeCollectionEntities(prev, cloudData.fournisseurs));
-        }
-        if (cloudData.sourcingList.length > 0) {
-          setSourcingList((prev) => mergeCollectionEntities(prev, cloudData.sourcingList));
-        }
-        if (Object.keys(cloudData.rentabilites).length > 0) {
-          setRentabilites((prev) => ({ ...prev, ...cloudData.rentabilites }));
-        }
-      } else {
-        // Cloud is empty, push local data as initial cloud seed
-        await pushAllLocalDataToCloud({
-          clients,
-          devis,
-          commandes,
-          factures,
-          paiements,
-          fournisseurs,
-          sourcingList,
-          rentabilites,
-        }, userId);
       }
 
       const remainingQueue = getOfflineQueue().length;
@@ -2460,7 +2517,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     } catch (e: any) {
       setSyncState('error');
       setLastSyncError(e?.message || 'Erreur lors de la synchronisation');
-      console.error('Erreur syncNow:', e);
+      console.error('[CloudSync] Erreur syncNow:', e);
       showToast('Erreur de synchronisation Cloud. Vos données locales sont préservées.', 'error');
       return { success: false, message: e?.message || 'Erreur lors de la synchronisation' };
     }
@@ -2472,10 +2529,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLastSyncError('Appareil hors ligne');
       return { success: false, message: 'Appareil hors ligne.' };
     }
+    const userId = getActiveUserId();
+    if (!userId) {
+      showToast('Veuillez connecter votre compte Google pour envoyer vos données vers le Cloud.', 'error');
+      return { success: false, message: 'Compte Google non connecté.' };
+    }
     setSyncState('syncing');
     setLastSyncError(null);
     try {
-      const userId = await getActiveUserId();
       const res = await pushAllLocalDataToCloud({
         clients,
         devis,
@@ -2514,10 +2575,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setLastSyncError('Appareil hors ligne');
       return { success: false, message: 'Appareil hors ligne.' };
     }
+    const userId = getActiveUserId();
+    if (!userId) {
+      showToast('Veuillez connecter votre compte Google pour récupérer vos données Cloud.', 'error');
+      return { success: false, message: 'Compte Google non connecté.' };
+    }
     setSyncState('syncing');
     setLastSyncError(null);
     try {
-      const userId = await getActiveUserId();
       const cloudData = await fetchAllCollectionsFromCloud(userId);
       if (cloudData) {
         const totalCloudItems =
@@ -2531,7 +2596,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         // Protection: Never wipe local data if cloud is empty
         if (totalCloudItems === 0) {
-          setSyncState('pending');
+          setSyncState('synced');
           showToast('Le Cloud est vide : vos données locales sont intégralement préservées.', 'info');
           return { success: true, message: 'Cloud vide, données locales conservées.' };
         }

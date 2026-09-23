@@ -104,14 +104,28 @@ export const CloudSyncView: React.FC = () => {
     }
   };
 
+  const isCloudConnected = Boolean(syncStats?.isGoogleConnected && currentAuthUser?.uid);
+
   const getStatusBadge = () => {
+    if (!isCloudConnected) {
+      return (
+        <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-700">
+            <span className="text-xs">☁️</span>
+            Cloud non connecté
+          </span>
+          <span className="text-[11px] text-indigo-200 font-medium">Données locales sécurisées</span>
+        </div>
+      );
+    }
+
     switch (syncState) {
       case 'synced':
         return (
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
               <span className="text-xs">🟢</span>
-              Synchronisé
+              Cloud connecté • Synchronisé
             </span>
             <span className="text-[11px] text-indigo-200 font-medium">Données locales à jour</span>
           </div>
@@ -121,9 +135,9 @@ export const CloudSyncView: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-2">
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-300 dark:border-amber-800">
               <span className="text-xs">🟡</span>
-              Modifications en attente ({syncStats.pendingOfflineQueue})
+              Cloud connecté • En attente ({syncStats.pendingOfflineQueue})
             </span>
-            <span className="text-[11px] text-amber-200 font-medium">Synchronisation cloud en attente</span>
+            <span className="text-[11px] text-amber-200 font-medium">Synchronisation différée</span>
           </div>
         );
       case 'syncing':
@@ -140,7 +154,7 @@ export const CloudSyncView: React.FC = () => {
               <span className="text-xs">⚪</span>
               Hors connexion
             </span>
-            <span className="text-[11px] text-indigo-200 font-medium">Données locales à jour</span>
+            <span className="text-[11px] text-indigo-200 font-medium">Données locales disponibles</span>
           </div>
         );
       case 'error':
@@ -206,44 +220,63 @@ export const CloudSyncView: React.FC = () => {
       </div>
 
       {/* Security & Authentication Card */}
-      <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="p-4 sm:p-5 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div className="flex items-start gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 border ${
+              isCloudConnected
+                ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800'
+                : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border-indigo-100 dark:border-indigo-900'
+            }`}>
               <ShieldCheck className="w-5 h-5" />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                  Sécurité Cloud & Compte Utilisateur
+                  Compte Utilisateur & Sécurité Cloud
                 </h4>
-                {currentAuthUser && !currentAuthUser.isAnonymous ? (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
-                    Compte Google
+                {isCloudConnected ? (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-300">
+                    🟢 Compte Google connecté
                   </span>
                 ) : (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-200">
-                    Session Sécurisée
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border border-slate-300">
+                    ☁ Cloud non connecté
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500 mt-0.5">
-                {currentAuthUser?.email
-                  ? `Connecté en tant que : ${currentAuthUser.email}`
-                  : `ID Utilisateur sécurisé : ${currentAuthUser?.uid || 'Attribution en cours...'}`}
-              </p>
-              <p className="text-[11px] text-indigo-600 dark:text-indigo-400 font-mono mt-1">
-                Chemin Firestore isolé : /users/{currentAuthUser?.uid || 'userId'}/[collections]
-              </p>
+              {isCloudConnected ? (
+                <div className="space-y-0.5 mt-1">
+                  <p className="text-xs text-slate-700 dark:text-slate-300 font-medium">
+                    {currentAuthUser?.displayName ? `${currentAuthUser.displayName} (${currentAuthUser.email})` : currentAuthUser?.email}
+                  </p>
+                  <p className="text-[11px] text-slate-500 font-mono">
+                    UID Firebase : <span className="text-indigo-600 dark:text-indigo-400 font-semibold">{currentAuthUser?.uid}</span>
+                  </p>
+                  <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-mono">
+                    Chemin Firestore isolé : /users/{currentAuthUser?.uid}/[collections]
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-1 mt-1">
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    Connectez votre compte Google pour activer la synchronisation Cloud multi-appareils (Android ↔ Windows ↔ Web).
+                  </p>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                    Vos données locales actuelles restent 100% sécurisées et seront copiées dans votre espace privé.
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            {currentAuthUser && !currentAuthUser.isAnonymous ? (
+            {isCloudConnected ? (
               <button
                 onClick={handleGoogleSignOut}
                 disabled={isLoading}
-                className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                className="px-3.5 py-2 rounded-xl border border-slate-200 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 font-medium text-xs flex items-center gap-1.5 transition-colors cursor-pointer"
               >
                 <LogOut className="w-3.5 h-3.5" />
                 Déconnexion Google
@@ -252,14 +285,21 @@ export const CloudSyncView: React.FC = () => {
               <button
                 onClick={handleGoogleSignIn}
                 disabled={isLoading}
-                className="px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs flex items-center gap-1.5 shadow-xs transition-colors cursor-pointer"
+                className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs flex items-center gap-2 shadow-md transition-all active:scale-98 cursor-pointer"
               >
-                <LogIn className="w-3.5 h-3.5" />
-                Se connecter avec Google
+                <LogIn className="w-4 h-4" />
+                Ajouter / Connecter un compte Google
               </button>
             )}
           </div>
         </div>
+
+        {!isCloudConnected && (
+          <div className="pt-2 border-t border-slate-100 dark:border-slate-800 text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center justify-between gap-2">
+            <span>Architecture zéro-conflit (Last-Write-Wins) avec détection automatique Popup / Redirection</span>
+            <span className="font-mono text-[10px] text-indigo-600 dark:text-indigo-400">Domaine autorisé : instantafrik-rgb.github.io</span>
+          </div>
+        )}
       </div>
 
       {/* Last Sync Error Alert with Direct Retry */}

@@ -192,7 +192,7 @@ export const GoogleSheetsView: React.FC<GoogleSheetsViewProps> = ({ onNavigateTa
     setIsAuthenticating(true);
     setAuthError(null);
     try {
-      const { user, accessToken: token } = await googleSignIn();
+      const { user, accessToken: token } = await googleSignIn({ includeWorkspaceScopes: true });
       setGoogleUser(user);
       setAccessToken(token);
       updateParametres({
