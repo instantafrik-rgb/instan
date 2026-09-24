@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   X,
+  ArrowLeft,
   FileDown,
   Share2,
   MessageCircle,
@@ -140,8 +141,17 @@ export const DevisDetailModal: React.FC<DevisDetailModalProps> = ({
       <div className="bg-white dark:bg-[#121214] rounded-2xl max-w-xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
         {/* Header - Modern Monochrome */}
         <div className="bg-neutral-950 p-4 sm:p-5 text-white flex items-center justify-between border-b border-neutral-800">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white text-black flex items-center justify-center font-bold text-xs tracking-wider border border-neutral-200">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition cursor-pointer border border-neutral-700"
+              title="Retour à l'écran précédent"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Retour</span>
+            </button>
+            <div className="w-9 h-9 rounded-xl bg-white text-black flex items-center justify-center font-bold text-xs tracking-wider border border-neutral-200 shrink-0">
               DEV
             </div>
             <div>
@@ -155,8 +165,10 @@ export const DevisDetailModal: React.FC<DevisDetailModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full bg-neutral-800 text-neutral-400 hover:text-white transition"
+            className="p-1.5 rounded-full bg-neutral-800 text-neutral-400 hover:text-white transition cursor-pointer"
+            title="Fermer"
           >
             <X className="w-4 h-4" />
           </button>

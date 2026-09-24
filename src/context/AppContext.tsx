@@ -1170,9 +1170,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateCommandeStatut = (commandeId: string, statut: CommandeStatut, numeroSuivi?: string) => {
     let updatedCmd: Commande | null = null;
+    let oldStatut: CommandeStatut | undefined;
     setCommandes((prev) =>
       prev.map((c) => {
         if (c.id !== commandeId) return c;
+        oldStatut = c.statut;
         const updated = {
           ...c,
           statut,
@@ -1195,8 +1197,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       syncEntityToCloud('commandes', 'update', commandeId, updatedCmd);
     }
     const target = commandes.find((c) => c.id === commandeId);
-    if (target) {
-      logEvent('Changement statut commande', target.numero, 'Commande', `Nouveau statut : ${statut}`);
+    if (target && oldStatut !== statut) {
+      logEvent(
+        'Changement statut commande',
+        target.numero,
+        'Commande',
+        `Statut modifié : ${oldStatut || target.statut} → ${statut}`
+      );
     }
   };
 

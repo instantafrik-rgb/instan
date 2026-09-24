@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
+  ArrowLeft,
   Package,
   Clock,
   CheckCircle2,
@@ -48,6 +49,7 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
     archiveCommande,
     deleteCommande,
     parametres,
+    showToast,
   } = useApp();
 
   const [showRentabilite, setShowRentabilite] = useState(false);
@@ -56,8 +58,15 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
   const [fraisReels, setFraisReels] = useState<number>(0);
 
   const [selectedStatut, setSelectedStatut] = useState<CommandeStatut | ''>('');
+  const [pendingStatut, setPendingStatut] = useState<CommandeStatut | null>(null);
+  const [statutSuccessFeedback, setStatutSuccessFeedback] = useState<string | null>(null);
   const [numeroSuivi, setNumeroSuivi] = useState('');
   const [isEditingTracking, setIsEditingTracking] = useState(false);
+
+  useEffect(() => {
+    setPendingStatut(null);
+    setStatutSuccessFeedback(null);
+  }, [commande?.id]);
 
   if (!commande) return null;
 
@@ -167,8 +176,17 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
       <div className="bg-white dark:bg-[#121214] rounded-2xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden">
         {/* Header - Modern Monochrome */}
         <div className="bg-neutral-950 p-4 sm:p-5 text-white flex items-center justify-between border-b border-neutral-800">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-white text-black font-bold flex items-center justify-center text-xs tracking-wider border border-neutral-200">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition cursor-pointer border border-neutral-700"
+              title="Retour à l'écran précédent"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Retour</span>
+            </button>
+            <div className="w-9 h-9 rounded-xl bg-white text-black font-bold flex items-center justify-center text-xs tracking-wider border border-neutral-200 shrink-0">
               CMD
             </div>
             <div>
@@ -184,8 +202,10 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
             </div>
           </div>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 rounded-full bg-neutral-800 text-neutral-400 hover:text-white transition"
+            className="p-1.5 rounded-full bg-neutral-800 text-neutral-400 hover:text-white transition cursor-pointer"
+            title="Fermer"
           >
             <X className="w-4 h-4" />
           </button>
@@ -302,9 +322,17 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
                   Changer le statut actuel
                 </label>
                 <select
-                  value={commande.statut}
-                  onChange={(e) => handleStatutChange(e.target.value as CommandeStatut)}
-                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-semibold"
+                  value={pendingStatut || commande.statut}
+                  onChange={(e) => {
+                    const next = e.target.value as CommandeStatut;
+                    if (next === commande.statut) {
+                      setPendingStatut(null);
+                    } else {
+                      setPendingStatut(next);
+                      setStatutSuccessFeedback(null);
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white font-semibold cursor-pointer"
                 >
                   {allStatuts.map((st) => (
                     <option key={st} value={st}>
@@ -351,6 +379,71 @@ export const CommandeDetailModal: React.FC<CommandeDetailModalProps> = ({
                   </div>
                 )}
               </div>
+
+              {/* Validation Zone for Status Change */}
+              {pendingStatut && pendingStatut !== commande.statut && (
+                <div className="col-span-1 sm:col-span-2 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 text-slate-900 dark:text-white space-y-2.5 shadow-xs">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>Confirmation requise pour le changement de statut</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-xs flex-wrap font-medium">
+                    <span className="text-slate-500 dark:text-slate-400">Statut actuel :</span>
+                    <span className="px-2 py-0.5 rounded-md font-semibold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                      {commande.statut}
+                    </span>
+                    <span className="text-amber-600 font-bold">→</span>
+                    <span className="text-slate-500 dark:text-slate-400">Nouveau statut :</span>
+                    <span className="px-2 py-0.5 rounded-md font-bold bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-100 border border-amber-400">
+                      {pendingStatut}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                    L'ancien statut reste conservé tant que vous n'avez pas validé l'enregistrement.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => setPendingStatut(null)}
+                      className="px-3.5 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-100 dark:hover:bg-slate-700 transition cursor-pointer"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (pendingStatut) {
+                          updateCommandeStatut(commande.id, pendingStatut);
+                          setStatutSuccessFeedback("Statut de la commande mis à jour.");
+                          showToast("Statut de la commande mis à jour.", "success");
+                          setPendingStatut(null);
+                        }
+                      }}
+                      className="px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-xs transition cursor-pointer flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      Enregistrer le statut
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Confirmation Visuelle Claire */}
+              {statutSuccessFeedback && !pendingStatut && (
+                <div className="col-span-1 sm:col-span-2 p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-bold flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                    <span>{statutSuccessFeedback}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setStatutSuccessFeedback(null)}
+                    className="text-xs text-emerald-700 dark:text-emerald-300 hover:underline cursor-pointer"
+                  >
+                    Fermer
+                  </button>
+                </div>
+              )}
             </div>
           </div>
 

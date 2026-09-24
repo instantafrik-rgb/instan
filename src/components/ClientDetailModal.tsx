@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   X,
+  ArrowLeft,
   Phone,
   MessageCircle,
   MapPin,
@@ -194,15 +195,27 @@ export const ClientDetailModal: React.FC<ClientDetailModalProps> = ({
       <div className="bg-white dark:bg-[#111827] rounded-2xl max-w-2xl w-full max-h-[94vh] flex flex-col shadow-2xl border border-neutral-200 dark:border-neutral-800 overflow-hidden animate-in fade-in zoom-in-95 duration-150">
         {/* Top Header */}
         <div className="bg-neutral-950 p-4 sm:p-5 text-white relative border-b border-neutral-800">
-          <button
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white transition-colors cursor-pointer"
-            title="Fermer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <div className="flex items-center justify-between mb-3">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-neutral-800 hover:bg-neutral-700 text-neutral-200 text-xs font-semibold transition cursor-pointer border border-neutral-700"
+              title="Retour à l'écran précédent"
+            >
+              <ArrowLeft className="w-3.5 h-3.5" />
+              <span>Retour</span>
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="p-1.5 rounded-full bg-neutral-800 hover:bg-neutral-700 text-neutral-400 hover:text-white transition-colors cursor-pointer"
+              title="Fermer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
 
-          <div className="flex items-center gap-3 pr-8">
+          <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-neutral-200 to-white text-neutral-950 font-black text-lg flex items-center justify-center shadow-md shrink-0">
               {client.nom.slice(0, 2).toUpperCase()}
             </div>

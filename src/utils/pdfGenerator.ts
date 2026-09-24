@@ -511,9 +511,9 @@ export function generateFacturePDF(
     type: 'unpaid',
   };
   if (isPayee) {
-    headerBadge = { text: '✓ PAYÉE / SOLDÉE', type: 'paid' };
+    headerBadge = { text: 'PAYÉE', type: 'paid' };
   } else if (isPartielle) {
-    headerBadge = { text: '🟠 PARTIELLEMENT PAYÉE', type: 'partial' };
+    headerBadge = { text: 'PARTIELLEMENT PAYÉE', type: 'partial' };
   }
 
   // 1. En-tête Commun
@@ -698,7 +698,7 @@ export function generateFacturePDF(
     curY += rowHeight;
   });
 
-  // 4. Récapitulatif Financier & Modalités de règlement
+  // 4. Récapitulatif Financier (Présentation simplifiée, sans section modalités de règlement)
   const neededRecapHeight = 44;
   if (curY + neededRecapHeight > 268) {
     doc.addPage();
@@ -709,35 +709,36 @@ export function generateFacturePDF(
   const startRecapY = curY;
   const boxH = 34;
 
-  // Modalités de règlement (Gauche) - Factuelle, sobre et neutre
+  // Bloc Notes & Observations (Gauche) - Sans section modalités de règlement
   const leftBoxW = 98;
   doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
   doc.roundedRect(14, startRecapY, leftBoxW, boxH, 1.5, 1.5, 'F');
   doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
   doc.roundedRect(14, startRecapY, leftBoxW, boxH, 1.5, 1.5, 'S');
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
-  doc.text('MODALITÉS DE RÈGLEMENT', 18, startRecapY + 5.5);
+  if (facture.notes && facture.notes.trim().length > 0) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+    doc.text('NOTES & OBSERVATIONS', 18, startRecapY + 5.5);
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
-  doc.text('• Modes acceptés : Espèces, TMoney, Flooz, Virement bancaire.', 18, startRecapY + 12);
-  doc.text('• Règlement attendu selon les conditions de la commande.', 18, startRecapY + 17.5);
-  doc.text('• Un reçu officiel est émis pour chaque versement.', 18, startRecapY + 23);
-
-  if (facture.notes) {
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(6.8);
-    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
-    const n = facture.notes.length > 55 ? `${facture.notes.substring(0, 52)}...` : facture.notes;
-    doc.text(`Note : ${n}`, 18, startRecapY + 29);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+    const splitNotes = doc.splitTextToSize(facture.notes, leftBoxW - 8);
+    doc.text(splitNotes.slice(0, 3), 18, startRecapY + 12);
   } else {
-    doc.setFontSize(6.8);
-    doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
-    doc.text('Merci pour votre confiance et votre collaboration.', 18, startRecapY + 29);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(cInk[0], cInk[1], cInk[2]);
+    doc.text('ENGAGEMENT QUALITÉ & SERVICE', 18, startRecapY + 5.5);
+
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(cSlate[0], cSlate[1], cSlate[2]);
+    doc.text('• Produits rigoureusement contrôlés avant expédition.', 18, startRecapY + 12);
+    doc.text('• Suivi logistique et transparence à chaque étape.', 18, startRecapY + 17.5);
+    doc.text('• Merci pour votre confiance et votre collaboration.', 18, startRecapY + 23);
   }
 
   // Récapitulatif Financier (Droite) - Uniquement les données financières, sans répétition de statut
@@ -871,32 +872,7 @@ export function generateFacturePDF(
     curY += 4;
   }
 
-  // 6. Mentions Légales & Pièce Justificative (Zone finale sobre et compacte)
-  const noticeH = 14;
-  if (curY + noticeH > 275) {
-    doc.addPage();
-    curY = drawContinuationHeader(doc, params, 'FACTURE', facture.numero);
-  }
-
-  doc.setFillColor(cCardBg[0], cCardBg[1], cCardBg[2]);
-  doc.roundedRect(14, curY, 182, noticeH, 1.5, 1.5, 'F');
-  doc.setDrawColor(cBorder[0], cBorder[1], cBorder[2]);
-  doc.roundedRect(14, curY, 182, noticeH, 1.5, 1.5, 'S');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.2);
-  doc.setTextColor(cInk[0], cInk[1], cInk[2]);
-  doc.text('MENTIONS LÉGALES & CONDITIONS', 18, curY + 4.5);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.8);
-  doc.setTextColor(cMuted[0], cMuted[1], cMuted[2]);
-  const mentionText =
-    params.mentionsLegalesDefaut ||
-    'Document officiel attestant des prestations facturées et des règlements enregistrés. Tout retard de paiement est soumis aux conditions générales.';
-  doc.text(mentionText, 18, curY + 9.5);
-
-  // 7. Finalisation des pages et pieds de page
+  // 6. Finalisation des pages et pieds de page
   finalizeDocumentPages(doc, params);
 
   const blob = doc.output('blob');
@@ -970,7 +946,7 @@ export function getFactureWhatsAppMessage(facture: Facture, client: Client | und
   let conclusion = 'Merci pour votre confiance.';
 
   if (isPayee) {
-    statutLigne = `• Statut : *PAYÉE / SOLDÉE (Règlement intégral)*\n• Reste à payer : *0 FCFA*`;
+    statutLigne = `• Statut : *PAYÉE (Règlement intégral)*\n• Reste à payer : *0 FCFA*`;
     conclusion = 'Nous confirmons la bonne réception de l\'intégralité de votre règlement.\nMerci infiniment pour votre confiance !';
   } else if (isPartielle) {
     statutLigne = `• Statut : *PARTIELLEMENT PAYÉE*\n• Montant réglé : *${payeFormatte} FCFA*\n• Solde restant : *${soldeFormatte} FCFA*`;

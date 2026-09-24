@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AppProvider, useApp } from './context/AppContext';
 import { Navbar } from './components/Navbar';
 import { BottomNav } from './components/BottomNav';
@@ -24,7 +24,39 @@ import { GlobalSearchModal } from './components/GlobalSearchModal';
 import { PinLockModal } from './components/PinLockModal';
 import { AndroidInstallModal } from './components/AndroidInstallModal';
 import { GoogleSheetsView } from './components/GoogleSheetsView';
+import { ExitConfirmModal } from './components/ExitConfirmModal';
 import { TabType, Commande, Devis, Client, Facture } from './types';
+
+interface NavigationScreen {
+  tab: TabType;
+  filter?: string | null;
+  // Detail modals state
+  selectedCommandeId?: string | null;
+  selectedDevisId?: string | null;
+  selectedFactureId?: string | null;
+  selectedClientId?: string | null;
+  isSearchOpen?: boolean;
+  isInstallModalOpen?: boolean;
+  isNewDevisModalOpen?: boolean;
+  preselectedClientIdForDevis?: string | null;
+  isNewPaiementModalOpen?: boolean;
+  preselectedCommandeIdForPaiement?: string | null;
+}
+
+const initialScreen: NavigationScreen = {
+  tab: 'dashboard',
+  filter: null,
+  selectedCommandeId: null,
+  selectedDevisId: null,
+  selectedFactureId: null,
+  selectedClientId: null,
+  isSearchOpen: false,
+  isInstallModalOpen: false,
+  isNewDevisModalOpen: false,
+  preselectedClientIdForDevis: null,
+  isNewPaiementModalOpen: false,
+  preselectedCommandeIdForPaiement: null,
+};
 
 const MainAppContent: React.FC = () => {
   const {
@@ -35,37 +67,249 @@ const MainAppContent: React.FC = () => {
     addPaiement,
     commandes,
     devis,
+    factures,
+    clients,
   } = useApp();
 
-  const [currentTab, setCurrentTab] = useState<TabType>('dashboard');
+  // Internal Navigation History Stack
+  const [navStack, setNavStack] = useState<NavigationScreen[]>([initialScreen]);
+  const [showExitConfirm, setShowExitConfirm] = useState(false);
 
-  // Filter states for navigation from Dashboard to modules
-  const [facturesFilter, setFacturesFilter] = useState<string | null>(null);
-  const [devisFilter, setDevisFilter] = useState<string | null>(null);
-  const [commandesFilter, setCommandesFilter] = useState<string | null>(null);
-  const [sourcingFilter, setSourcingFilter] = useState<string | null>(null);
+  const navStackRef = useRef(navStack);
+  navStackRef.current = navStack;
+  const showExitConfirmRef = useRef(showExitConfirm);
+  showExitConfirmRef.current = showExitConfirm;
 
-  const handleDashboardNavigate = (tab: TabType, filter?: string) => {
-    if (tab === 'factures') setFacturesFilter(filter || null);
-    if (tab === 'devis') setDevisFilter(filter || null);
-    if (tab === 'commandes') setCommandesFilter(filter || null);
-    if (tab === 'sourcing') setSourcingFilter(filter || null);
-    setCurrentTab(tab);
+  // Active Screen is always the top of the stack
+  const currentScreen = navStack[navStack.length - 1] || initialScreen;
+  const currentTab = currentScreen.tab;
+  const facturesFilter = currentTab === 'factures' ? currentScreen.filter || null : null;
+  const devisFilter = currentTab === 'devis' ? currentScreen.filter || null : null;
+  const commandesFilter = currentTab === 'commandes' ? currentScreen.filter || null : null;
+  const sourcingFilter = currentTab === 'sourcing' ? currentScreen.filter || null : null;
+
+  // Active items resolved reactively by ID
+  const selectedCommandeForDetail = currentScreen.selectedCommandeId
+    ? commandes.find((c) => c.id === currentScreen.selectedCommandeId) || null
+    : null;
+  const selectedDevisForDetail = currentScreen.selectedDevisId
+    ? devis.find((d) => d.id === currentScreen.selectedDevisId) || null
+    : null;
+  const selectedFactureForDetail = currentScreen.selectedFactureId
+    ? factures.find((f) => f.id === currentScreen.selectedFactureId) || null
+    : null;
+  const selectedClientForDetail = currentScreen.selectedClientId
+    ? clients.find((c) => c.id === currentScreen.selectedClientId) || null
+    : null;
+
+  const isSearchOpen = !!currentScreen.isSearchOpen;
+  const isInstallModalOpen = !!currentScreen.isInstallModalOpen;
+  const isNewDevisModalOpen = !!currentScreen.isNewDevisModalOpen;
+  const preselectedClientForDevis = currentScreen.preselectedClientIdForDevis
+    ? clients.find((c) => c.id === currentScreen.preselectedClientIdForDevis) || null
+    : null;
+  const isNewPaiementModalOpen = !!currentScreen.isNewPaiementModalOpen;
+  const preselectedCommandeForPaiement = currentScreen.preselectedCommandeIdForPaiement
+    ? commandes.find((c) => c.id === currentScreen.preselectedCommandeIdForPaiement) || null
+    : null;
+
+  // Push new state to history
+  const pushScreen = useCallback((screen: NavigationScreen) => {
+    setNavStack((prev) => {
+      const next = [...prev, screen];
+      try {
+        window.history.pushState({ nantorStep: next.length - 1 }, '', window.location.href);
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // Back navigation function
+  const handleBack = useCallback((isFromPopstate = false) => {
+    if (showExitConfirmRef.current) {
+      setShowExitConfirm(false);
+      return;
+    }
+
+    const stack = navStackRef.current;
+    if (stack.length > 1) {
+      setNavStack((prev) => prev.slice(0, prev.length - 1));
+      if (!isFromPopstate) {
+        try {
+          window.history.back();
+        } catch {}
+      }
+    } else {
+      // Reached the root of the app (Dashboard with no modals) -> Request exit confirmation
+      setShowExitConfirm(true);
+    }
+  }, []);
+
+  // Synchronize Browser History / Popstate (PWA, Desktop, Mobile Web)
+  useEffect(() => {
+    if (!window.history.state || typeof window.history.state.nantorStep !== 'number') {
+      try {
+        window.history.replaceState({ nantorStep: 0 }, '', window.location.href);
+      } catch {}
+    }
+
+    const handlePopState = () => {
+      if (showExitConfirmRef.current) {
+        setShowExitConfirm(false);
+        try {
+          window.history.pushState({ nantorStep: 0 }, '', window.location.href);
+        } catch {}
+        return;
+      }
+
+      if (navStackRef.current.length > 1) {
+        handleBack(true);
+      } else {
+        // At root: re-arm history so user is not evicted without confirmation
+        try {
+          window.history.pushState({ nantorStep: 0 }, '', window.location.href);
+        } catch {}
+        setShowExitConfirm(true);
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [handleBack]);
+
+  // Support Capacitor Native Android Back Button
+  useEffect(() => {
+    let removeListener: (() => void) | null = null;
+    const setupCapacitor = async () => {
+      try {
+        const { Capacitor } = await import('@capacitor/core');
+        if (Capacitor.isNativePlatform()) {
+          const { App: CapApp } = await import('@capacitor/app');
+          const listener = await CapApp.addListener('backButton', () => {
+            handleBack(false);
+          });
+          removeListener = () => {
+            listener.remove();
+          };
+        }
+      } catch {}
+    };
+    setupCapacitor();
+    return () => {
+      if (removeListener) removeListener();
+    };
+  }, [handleBack]);
+
+  // Handle Exit Confirmation
+  const handleConfirmExit = useCallback(async () => {
+    setShowExitConfirm(false);
+    try {
+      const { Capacitor } = await import('@capacitor/core');
+      if (Capacitor.isNativePlatform()) {
+        const { App: CapApp } = await import('@capacitor/app');
+        await CapApp.exitApp();
+        return;
+      }
+    } catch {}
+    try {
+      window.close();
+    } catch {}
+    window.history.go(-(window.history.length || 1));
+  }, []);
+
+  // Navigation handlers
+  const handleNavigateTab = (tab: TabType) => {
+    if (
+      currentScreen.tab === tab &&
+      !currentScreen.selectedCommandeId &&
+      !currentScreen.selectedDevisId &&
+      !currentScreen.selectedFactureId &&
+      !currentScreen.selectedClientId &&
+      !currentScreen.isSearchOpen &&
+      !currentScreen.isInstallModalOpen &&
+      !currentScreen.isNewDevisModalOpen &&
+      !currentScreen.isNewPaiementModalOpen &&
+      !currentScreen.filter
+    ) {
+      return;
+    }
+    pushScreen({
+      tab,
+      filter: null,
+    });
   };
 
-  // Modal active states
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [isInstallModalOpen, setIsInstallModalOpen] = useState(false);
-  const [isNewDevisModalOpen, setIsNewDevisModalOpen] = useState(false);
-  const [preselectedClientForDevis, setPreselectedClientForDevis] = useState<Client | null>(null);
+  const handleDashboardNavigate = (tab: TabType, filter?: string) => {
+    pushScreen({
+      tab,
+      filter: filter || null,
+    });
+  };
 
-  const [isNewPaiementModalOpen, setIsNewPaiementModalOpen] = useState(false);
-  const [preselectedCommandeForPaiement, setPreselectedCommandeForPaiement] = useState<Commande | null>(null);
+  const handleOpenNewDevis = (client?: Client) => {
+    pushScreen({
+      ...currentScreen,
+      isNewDevisModalOpen: true,
+      preselectedClientIdForDevis: client?.id || null,
+    });
+  };
 
-  const [selectedCommandeForDetail, setSelectedCommandeForDetail] = useState<Commande | null>(null);
-  const [selectedDevisForDetail, setSelectedDevisForDetail] = useState<Devis | null>(null);
-  const [selectedFactureForDetail, setSelectedFactureForDetail] = useState<Facture | null>(null);
-  const [selectedClientForDetail, setSelectedClientForDetail] = useState<Client | null>(null);
+  const handleOpenNewPaiement = (commande?: Commande) => {
+    pushScreen({
+      ...currentScreen,
+      isNewPaiementModalOpen: true,
+      preselectedCommandeIdForPaiement: commande?.id || null,
+    });
+  };
+
+  const handleConvertedToCommande = (cmd: Commande) => {
+    pushScreen({
+      tab: 'commandes',
+      selectedCommandeId: cmd.id,
+    });
+  };
+
+  const handleSelectCommande = (cmd: Commande) => {
+    pushScreen({
+      ...currentScreen,
+      selectedCommandeId: cmd.id,
+    });
+  };
+
+  const handleSelectDevis = (d: Devis) => {
+    pushScreen({
+      ...currentScreen,
+      selectedDevisId: d.id,
+    });
+  };
+
+  const handleSelectFacture = (fac: Facture) => {
+    pushScreen({
+      ...currentScreen,
+      selectedFactureId: fac.id,
+    });
+  };
+
+  const handleSelectClient = (c: Client) => {
+    pushScreen({
+      ...currentScreen,
+      selectedClientId: c.id,
+    });
+  };
+
+  const handleOpenSearch = () => {
+    pushScreen({
+      ...currentScreen,
+      isSearchOpen: true,
+    });
+  };
+
+  const handleOpenAndroidInstall = () => {
+    pushScreen({
+      ...currentScreen,
+      isInstallModalOpen: true,
+    });
+  };
 
   // Synchronize theme with DOM (Supports 'dark_tech', 'premium_light', 'system', 'dark', 'light')
   useEffect(() => {
@@ -116,30 +360,16 @@ const MainAppContent: React.FC = () => {
     return <PinLockModal onUnlock={unlockApp} />;
   }
 
-  // Quick action triggers
-  const handleOpenNewDevis = (client?: Client) => {
-    setPreselectedClientForDevis(client || null);
-    setIsNewDevisModalOpen(true);
-  };
-
-  const handleOpenNewPaiement = (commande?: Commande) => {
-    setPreselectedCommandeForPaiement(commande || null);
-    setIsNewPaiementModalOpen(true);
-  };
-
-  const handleConvertedToCommande = (cmd: Commande) => {
-    setSelectedCommandeForDetail(cmd);
-    setCurrentTab('commandes');
-  };
-
   return (
     <div className="min-h-screen bg-[#f8f8fa] dark:bg-[#09090b] text-neutral-900 dark:text-neutral-100 flex flex-col font-sans transition-colors duration-200">
       {/* Top Mobile/Desktop Navigation Bar */}
       <Navbar
         currentTab={currentTab}
-        setCurrentTab={setCurrentTab}
-        onOpenSearch={() => setIsSearchOpen(true)}
-        onOpenAndroidInstall={() => setIsInstallModalOpen(true)}
+        setCurrentTab={handleNavigateTab}
+        onOpenSearch={handleOpenSearch}
+        onOpenAndroidInstall={handleOpenAndroidInstall}
+        onBack={() => handleBack(false)}
+        canGoBack={navStack.length > 1}
       />
 
       {/* Main Content Area */}
@@ -148,19 +378,19 @@ const MainAppContent: React.FC = () => {
           <DashboardView
             onNavigate={handleDashboardNavigate}
             onNewDevis={() => handleOpenNewDevis()}
-            onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
-            onSelectDevis={(d) => setSelectedDevisForDetail(d)}
-            onSelectFacture={(f) => setSelectedFactureForDetail(f)}
+            onSelectCommande={handleSelectCommande}
+            onSelectDevis={handleSelectDevis}
+            onSelectFacture={handleSelectFacture}
           />
         )}
 
         {currentTab === 'clients' && (
           <ClientsView
             onNewDevis={(client) => handleOpenNewDevis(client)}
-            onSelectDevis={(d) => setSelectedDevisForDetail(d)}
-            onSelectCommande={(c) => setSelectedCommandeForDetail(c)}
-            onSelectFacture={(f) => setSelectedFactureForDetail(f)}
-            onNavigateToTab={(tab) => setCurrentTab(tab)}
+            onSelectDevis={handleSelectDevis}
+            onSelectCommande={handleSelectCommande}
+            onSelectFacture={handleSelectFacture}
+            onNavigateToTab={handleNavigateTab}
           />
         )}
 
@@ -175,28 +405,28 @@ const MainAppContent: React.FC = () => {
         {currentTab === 'commandes' && (
           <CommandesView
             onNewPaiement={(cmd) => handleOpenNewPaiement(cmd)}
-            onViewFacture={(fac) => setSelectedFactureForDetail(fac)}
+            onViewFacture={handleSelectFacture}
             initialFilter={commandesFilter}
           />
         )}
 
         {currentTab === 'paiements' && (
           <PaiementsView
-            onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+            onSelectCommande={handleSelectCommande}
           />
         )}
 
         {currentTab === 'factures' && (
           <FacturesView
-            onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+            onSelectCommande={handleSelectCommande}
             initialFilter={facturesFilter}
           />
         )}
 
         {currentTab === 'sourcing' && (
           <SourcingView
-            onSelectDevis={(d) => setSelectedDevisForDetail(d)}
-            onNavigateToDevis={() => setCurrentTab('devis')}
+            onSelectDevis={handleSelectDevis}
+            onNavigateToDevis={() => handleNavigateTab('devis')}
             initialFilter={sourcingFilter}
           />
         )}
@@ -211,16 +441,16 @@ const MainAppContent: React.FC = () => {
 
         {currentTab === 'notifications' && (
           <NotificationsView
-            onNavigateTab={(t) => setCurrentTab(t)}
+            onNavigateTab={handleNavigateTab}
             onOpenCommande={(cmdId) => {
               const cmd = commandes.find((c) => c.id === cmdId);
-              if (cmd) setSelectedCommandeForDetail(cmd);
-              else setCurrentTab('commandes');
+              if (cmd) handleSelectCommande(cmd);
+              else handleNavigateTab('commandes');
             }}
             onOpenDevis={(devisId) => {
               const dev = devis.find((d) => d.id === devisId);
-              if (dev) setSelectedDevisForDetail(dev);
-              else setCurrentTab('devis');
+              if (dev) handleSelectDevis(dev);
+              else handleNavigateTab('devis');
             }}
           />
         )}
@@ -230,7 +460,7 @@ const MainAppContent: React.FC = () => {
         )}
 
         {currentTab === 'sheets' && (
-          <GoogleSheetsView onNavigateTab={(t) => setCurrentTab(t)} />
+          <GoogleSheetsView onNavigateTab={handleNavigateTab} />
         )}
 
         {currentTab === 'parametres' && (
@@ -243,39 +473,33 @@ const MainAppContent: React.FC = () => {
       </main>
 
       {/* Bottom Floating Navigation (Mobile-first Android UX) */}
-      <BottomNav currentTab={currentTab} setCurrentTab={setCurrentTab} />
+      <BottomNav currentTab={currentTab} setCurrentTab={handleNavigateTab} />
 
       {/* Global Search Modal */}
       <GlobalSearchModal
         isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        onSelectClient={(c) => setSelectedClientForDetail(c)}
-        onSelectDevis={(d) => setSelectedDevisForDetail(d)}
-        onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
-        onSelectFacture={(f) => setSelectedFactureForDetail(f)}
+        onClose={() => handleBack(false)}
+        onSelectClient={handleSelectClient}
+        onSelectDevis={handleSelectDevis}
+        onSelectCommande={handleSelectCommande}
+        onSelectFacture={handleSelectFacture}
       />
 
       {/* Global Devis Form Modal */}
       <DevisFormModal
         isOpen={isNewDevisModalOpen}
-        onClose={() => {
-          setIsNewDevisModalOpen(false);
-          setPreselectedClientForDevis(null);
-        }}
+        onClose={() => handleBack(false)}
         initialClient={preselectedClientForDevis}
         onSave={(data) => {
           const created = addDevis(data);
-          setSelectedDevisForDetail(created);
+          handleSelectDevis(created);
         }}
       />
 
       {/* Global Paiement Form Modal */}
       <PaiementFormModal
         isOpen={isNewPaiementModalOpen}
-        onClose={() => {
-          setIsNewPaiementModalOpen(false);
-          setPreselectedCommandeForPaiement(null);
-        }}
+        onClose={() => handleBack(false)}
         preselectedCommande={preselectedCommandeForPaiement}
         onSave={(data) => {
           addPaiement(data);
@@ -285,48 +509,56 @@ const MainAppContent: React.FC = () => {
       {/* Detail Modals for cross-linking */}
       <DevisDetailModal
         devis={selectedDevisForDetail}
-        onClose={() => setSelectedDevisForDetail(null)}
+        onClose={() => handleBack(false)}
         onEdit={() => {
-          // Open edit in DevisView
-          setCurrentTab('devis');
+          handleNavigateTab('devis');
         }}
         onConverted={handleConvertedToCommande}
         onFactureGenerated={(fac) => {
-          setSelectedFactureForDetail(fac);
-          setCurrentTab('factures');
+          pushScreen({
+            tab: 'factures',
+            selectedFactureId: fac.id,
+          });
         }}
       />
 
       <CommandeDetailModal
         commande={selectedCommandeForDetail}
-        onClose={() => setSelectedCommandeForDetail(null)}
+        onClose={() => handleBack(false)}
         onNewPaiement={(cmd) => handleOpenNewPaiement(cmd)}
-        onViewFacture={(fac) => setSelectedFactureForDetail(fac)}
+        onViewFacture={handleSelectFacture}
       />
 
       <FactureDetailModal
         facture={selectedFactureForDetail}
-        onClose={() => setSelectedFactureForDetail(null)}
-        onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
+        onClose={() => handleBack(false)}
+        onSelectCommande={handleSelectCommande}
       />
 
       <ClientDetailModal
         client={selectedClientForDetail}
-        onClose={() => setSelectedClientForDetail(null)}
+        onClose={() => handleBack(false)}
         onEdit={() => {
-          setCurrentTab('clients');
+          handleNavigateTab('clients');
         }}
         onNewDevis={(c) => handleOpenNewDevis(c)}
-        onSelectDevis={(d) => setSelectedDevisForDetail(d)}
-        onSelectCommande={(cmd) => setSelectedCommandeForDetail(cmd)}
-        onSelectFacture={(f) => setSelectedFactureForDetail(f)}
-        onNavigateToTab={(tab) => setCurrentTab(tab)}
+        onSelectDevis={handleSelectDevis}
+        onSelectCommande={handleSelectCommande}
+        onSelectFacture={handleSelectFacture}
+        onNavigateToTab={handleNavigateTab}
       />
 
       {/* Android Installation Modal */}
       <AndroidInstallModal
         isOpen={isInstallModalOpen}
-        onClose={() => setIsInstallModalOpen(false)}
+        onClose={() => handleBack(false)}
+      />
+
+      {/* Exit Confirmation Dialog when reaching root level */}
+      <ExitConfirmModal
+        isOpen={showExitConfirm}
+        onCancel={() => setShowExitConfirm(false)}
+        onConfirmExit={handleConfirmExit}
       />
     </div>
   );

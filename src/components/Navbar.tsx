@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
+  ArrowLeft,
   Settings,
   Lock,
   Search,
@@ -28,6 +29,8 @@ interface NavbarProps {
   setCurrentTab: (tab: TabType) => void;
   onOpenSearch: () => void;
   onOpenAndroidInstall?: () => void;
+  onBack?: () => void;
+  canGoBack?: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -35,6 +38,8 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentTab,
   onOpenSearch,
   onOpenAndroidInstall,
+  onBack,
+  canGoBack,
 }) => {
   const {
     parametres,
@@ -212,21 +217,34 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Barre principale de navigation */}
         <div className="flex items-center justify-between px-3 sm:px-4 py-2 sm:py-2.5">
           {/* Logo & Titre */}
-          <div
-            id="nav-logo-title"
-            onClick={() => setCurrentTab('dashboard')}
-            className="flex items-center gap-2.5 cursor-pointer select-none min-w-0 pr-2"
-          >
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-700 to-cyan-500 dark:from-blue-600 dark:to-cyan-400 flex items-center justify-center font-bold text-white shadow-xs text-xs tracking-wider border border-blue-600/30 shrink-0">
-              NSA
-            </div>
-            <div className="min-w-0">
-              <h1 className="text-sm sm:text-base font-bold tracking-tight text-neutral-900 dark:text-white leading-tight truncate">
-                {titles[currentTab] || 'Nantor Sourcing App'}
-              </h1>
-              <p className="text-[11px] text-neutral-500 dark:text-neutral-400 hidden sm:block truncate max-w-[220px]">
-                {parametres.entreprise.nom}
-              </p>
+          <div className="flex items-center gap-2 select-none min-w-0 pr-2">
+            {canGoBack && onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="px-2.5 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 dark:bg-neutral-800 dark:hover:bg-neutral-700 text-neutral-800 dark:text-neutral-200 flex items-center gap-1.5 transition font-semibold text-xs cursor-pointer border border-neutral-200/80 dark:border-neutral-700/80 shrink-0"
+                title="Retour à l'écran précédent"
+              >
+                <ArrowLeft className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Retour</span>
+              </button>
+            )}
+            <div
+              id="nav-logo-title"
+              onClick={() => setCurrentTab('dashboard')}
+              className="flex items-center gap-2.5 cursor-pointer min-w-0"
+            >
+              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-blue-700 to-cyan-500 dark:from-blue-600 dark:to-cyan-400 flex items-center justify-center font-bold text-white shadow-xs text-xs tracking-wider border border-blue-600/30 shrink-0">
+                NSA
+              </div>
+              <div className="min-w-0">
+                <h1 className="text-sm sm:text-base font-bold tracking-tight text-neutral-900 dark:text-white leading-tight truncate">
+                  {titles[currentTab] || 'Nantor Sourcing App'}
+                </h1>
+                <p className="text-[11px] text-neutral-500 dark:text-neutral-400 hidden sm:block truncate max-w-[220px]">
+                  {parametres.entreprise.nom}
+                </p>
+              </div>
             </div>
           </div>
 

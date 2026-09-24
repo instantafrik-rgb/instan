@@ -128,7 +128,7 @@ export const FacturesView: React.FC<FacturesViewProps> = ({ onSelectCommande, in
             { id: 'all', label: 'Toutes' },
             { id: 'Envoyée', label: 'En attente' },
             { id: 'Partiellement payée', label: 'Partiellement payées' },
-            { id: 'Payée', label: 'Soldées (Payées)' },
+            { id: 'Payée', label: 'Payées' },
             { id: 'En retard', label: 'En retard' },
           ].map((st) => (
             <button
@@ -214,7 +214,7 @@ export const FacturesView: React.FC<FacturesViewProps> = ({ onSelectCommande, in
                       {isPayee ? (
                         <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center justify-end gap-1">
                           <CheckCircle2 className="w-3.5 h-3.5" />
-                          Soldée
+                          Payée
                         </span>
                       ) : (
                         <span className="text-rose-600 dark:text-rose-400">
