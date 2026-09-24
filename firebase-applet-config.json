@@ -1,11 +1,11 @@
 {
-  "projectId": "imposing-snow-89brs",
-  "appId": "1:205508318907:web:746b24c29d21832a6dbb9e",
-  "apiKey": "AIzaSyC-rkwqtJT0gHU9BqP2QMT3zFgkkDSoTuw",
-  "authDomain": "imposing-snow-89brs.firebaseapp.com",
-  "storageBucket": "imposing-snow-89brs.firebasestorage.app",
-  "messagingSenderId": "205508318907",
+  "projectId": "nantor-sourcing-prod",
+  "appId": "1:250468956890:web:e11d3b758038246cae03e3",
+  "apiKey": "AIzaSyDgMypfw1fIGmE4by8bh3w8UC6UhlBrEts",
+  "authDomain": "nantor-sourcing-prod.firebaseapp.com",
+  "storageBucket": "nantor-sourcing-prod.firebasestorage.app",
+  "messagingSenderId": "250468956890",
   "measurementId": "",
-  "oAuthClientId": "205508318907-nq2icvr5gcu78lgmvejio74ohieovjhk.apps.googleusercontent.com",
+  "oAuthClientId": "",
   "recaptchaSiteKey": ""
 }

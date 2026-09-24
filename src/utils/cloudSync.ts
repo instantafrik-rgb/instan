@@ -11,18 +11,17 @@
  * - Offline Queue: Operations made offline or unauthenticated are safely queued in localStorage
  */
 
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getFirestore,
   collection,
   doc,
   setDoc,
   getDocs,
+  getDoc,
   deleteDoc,
   onSnapshot,
   Unsubscribe,
 } from 'firebase/firestore';
-import firebaseConfig from '../../firebase-applet-config.json';
+import { firestore } from './firebase';
 import {
   Client,
   Devis,
@@ -35,9 +34,7 @@ import {
   OfflineQueueItem,
 } from '../types';
 import { getCurrentUserId } from './googleAuth';
-
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const firestore = getFirestore(app);
+export { firestore };
 
 const STORAGE_KEYS = {
   OFFLINE_QUEUE: 'nantor_v4_sync_offline_queue',
@@ -503,3 +500,76 @@ export function subscribeToUserCollections(
     });
   };
 }
+
+/**
+ * Diagnostic temps réel Firestore : teste une écriture, une lecture et un nettoyage
+ * dans le chemin sécurisé /users/{userId}/_diagnostic/test_ping
+ * afin de vérifier concrètement les autorisations des règles Firestore.
+ */
+export async function testFirestoreConnection(targetUserId?: string): Promise<{
+  success: boolean;
+  message: string;
+  code?: string;
+  path?: string;
+  durationMs?: number;
+}> {
+  const userId = targetUserId || getCurrentUserId();
+  if (!userId) {
+    return {
+      success: false,
+      message: 'Utilisateur non authentifié (aucun UID Firebase disponible). Connectez-vous d\'abord avec un compte Google.',
+      code: 'auth/not-authenticated',
+    };
+  }
+
+  const startTime = Date.now();
+  const testDocPath = `/users/${userId}/_diagnostic/test_ping`;
+  const testRef = doc(firestore, 'users', userId, '_diagnostic', 'test_ping');
+
+  try {
+    const testPayload = {
+      test: true,
+      timestamp: new Date().toISOString(),
+      origin: typeof window !== 'undefined' ? window.location.origin : 'unknown',
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'unknown',
+    };
+
+    // 1. Écriture
+    await setDoc(testRef, testPayload, { merge: true });
+
+    // 2. Lecture
+    const snap = await getDoc(testRef);
+    if (!snap.exists()) {
+      return {
+        success: false,
+        message: `Écriture effectuée mais le document n'a pas pu être relu sur ${testDocPath}`,
+        code: 'firestore/read-failed',
+        path: testDocPath,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
+    // 3. Suppression de nettoyage
+    await deleteDoc(testRef).catch(() => {});
+
+    return {
+      success: true,
+      message: `Firestore OK (écriture, lecture et suppression réussies sous ${testDocPath})`,
+      code: 'ok',
+      path: testDocPath,
+      durationMs: Date.now() - startTime,
+    };
+  } catch (error: any) {
+    const code = error?.code || 'unknown';
+    const message = error?.message || 'Erreur inconnue Firestore';
+    console.error(`[Firestore Diagnostic] Échec sur ${testDocPath}:`, code, message, error);
+    return {
+      success: false,
+      message: `Firestore ERROR: [${code}] ${message}`,
+      code,
+      path: testDocPath,
+      durationMs: Date.now() - startTime,
+    };
+  }
+}
+

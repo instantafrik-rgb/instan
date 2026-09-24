@@ -1,6 +1,4 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
-  getAuth,
   signInWithPopup,
   signInWithRedirect,
   getRedirectResult,
@@ -8,20 +6,9 @@ import {
   onAuthStateChanged,
   User,
   signOut,
-  setPersistence,
-  browserLocalPersistence,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
-
-// Initialisation Firebase App (singleton réutilisable)
-const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
-
-// Activer la persistance locale du token d'authentification pour conserver la session
-// entre les réouvertures de la PWA sur Android, Windows et navigateur
-setPersistence(auth, browserLocalPersistence).catch((err) => {
-  console.warn('[GoogleAuth] Impossible d\'activer browserLocalPersistence:', err);
-});
+import { auth } from './firebase';
+export { auth };
 
 // Portées Google Workspace pour le module optionnel Google Sheets (NantorApp -> Sheets)
 export const GOOGLE_WORKSPACE_SCOPES = [
@@ -30,6 +17,38 @@ export const GOOGLE_WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/drive.file',
   'https://www.googleapis.com/auth/drive.readonly',
 ];
+
+export interface AuthErrorInfo {
+  code: string;
+  message: string;
+  timestamp: string;
+  domain?: string;
+  origin?: string;
+}
+
+let lastAuthErrorInfo: AuthErrorInfo | null = null;
+
+export function getLastAuthError(): AuthErrorInfo | null {
+  return lastAuthErrorInfo;
+}
+
+export function setLastAuthError(err: any): void {
+  if (!err) {
+    lastAuthErrorInfo = null;
+    return;
+  }
+  const code = err?.code || 'unknown';
+  const rawMessage = err?.message || 'Erreur inconnue';
+  const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  const domain = typeof window !== 'undefined' ? window.location.hostname : '';
+  lastAuthErrorInfo = {
+    code,
+    message: rawMessage,
+    timestamp: new Date().toISOString(),
+    domain,
+    origin,
+  };
+}
 
 /**
  * Génère le provider Google Auth selon le besoin :
@@ -55,7 +74,7 @@ export function createGoogleProvider(includeWorkspaceScopes = false): GoogleAuth
 // Variables de cache mémoire de session
 let cachedAccessToken: string | null = null;
 let cachedUser: User | null = null;
-let redirectResultHandled = false;
+let redirectResultPromise: Promise<{ user: User; accessToken: string | null } | null> | null = null;
 
 /**
  * Traduit les codes d'erreur Firebase Auth en messages clairs et compréhensibles.
@@ -64,16 +83,17 @@ export function formatAuthErrorMessage(error: any): string {
   if (!error) return 'Erreur de connexion inconnue.';
   const code = error?.code || '';
   const message = error?.message || '';
+  const currentHost = typeof window !== 'undefined' ? window.location.hostname : 'ce domaine';
 
   switch (code) {
     case 'auth/unauthorized-domain':
-      return 'Le domaine de l\'application (instantafrik-rgb.github.io ou domaine actuel) n\'est pas encore autorisé dans Firebase Authentication. Rendez-vous sur Firebase Console > Authentication > Paramètres > Domaines autorisés pour ajouter ce domaine.';
+      return `Le domaine "${currentHost}" n'est pas autorisé dans Firebase Authentication. Action requise : Connectez-vous à la Console Firebase > Authentication > Paramètres > Domaines autorisés, et ajoutez "${currentHost}".`;
     case 'auth/operation-not-allowed':
-      return 'La connexion avec Google n\'est pas activée dans Firebase. Activez le fournisseur Google dans Firebase Console > Authentication > Sign-in method.';
+      return 'Le fournisseur d\'authentification Google n\'est pas activé dans Firebase. Activez-le dans Firebase Console > Authentication > Sign-in method > Fournisseur Google.';
     case 'auth/popup-blocked':
-      return 'La fenêtre de connexion Google a été bloquée par votre navigateur. Autorisez les popups pour ce site ou utilisez la redirection.';
+      return 'La fenêtre contextuelle Google a été bloquée par le navigateur. Autorisez les popups pour ce site ou cliquez sur "Connexion par Redirection".';
     case 'auth/popup-closed-by-user':
-      return 'La fenêtre de connexion Google a été fermée avant la sélection du compte. Cliquez à nouveau sur "Connecter avec Google" pour vous identifier.';
+      return 'La fenêtre de connexion Google a été fermée avant la sélection du compte. Cliquez à nouveau pour vous identifier.';
     case 'auth/cancelled-popup-request':
       return 'Une tentative de connexion Google est déjà en cours dans une autre fenêtre ou a été interrompue. Veuillez réessayer.';
     case 'auth/invalid-api-key':
@@ -87,7 +107,7 @@ export function formatAuthErrorMessage(error: any): string {
     case 'auth/user-disabled':
       return 'Ce compte utilisateur a été désactivé dans Firebase Authentication.';
     case 'auth/internal-error':
-      return 'Erreur interne Firebase. Vérifiez la configuration du projet Firebase.';
+      return `Erreur interne Firebase (${message}). Vérifiez la configuration du projet.`;
     default:
       if (message.includes('popup')) {
         return 'La fenêtre contextuelle Google a été bloquée ou interrompue.';
@@ -99,27 +119,35 @@ export function formatAuthErrorMessage(error: any): string {
 /**
  * Traite le retour d'une authentification par redirection Google (signInWithRedirect).
  * Crucial pour les environnements PWA Android / Windows où les popups peuvent échouer.
+ * Utilise un singleton Promise pour éviter les exécutions concurrentes.
  */
-export async function handleRedirectResult(): Promise<{ user: User; accessToken: string | null } | null> {
-  if (redirectResultHandled) return null;
-  redirectResultHandled = true;
-
-  try {
-    const result = await getRedirectResult(auth);
-    if (result && result.user) {
-      cachedUser = result.user;
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) {
-        cachedAccessToken = credential.accessToken;
-      }
-      console.log('[GoogleAuth] Succès retour de redirection Google. UID Firebase:', result.user.uid, 'Email:', result.user.email);
-      return { user: result.user, accessToken: cachedAccessToken };
-    }
-  } catch (error: any) {
-    console.error('[GoogleAuth] Erreur lors du traitement getRedirectResult:', error);
-    throw error;
+export function handleRedirectResult(): Promise<{ user: User; accessToken: string | null } | null> {
+  if (redirectResultPromise) {
+    return redirectResultPromise;
   }
-  return null;
+
+  redirectResultPromise = (async () => {
+    try {
+      const result = await getRedirectResult(auth);
+      if (result && result.user) {
+        cachedUser = result.user;
+        const credential = GoogleAuthProvider.credentialFromResult(result);
+        if (credential?.accessToken) {
+          cachedAccessToken = credential.accessToken;
+        }
+        setLastAuthError(null);
+        console.log('[GoogleAuth] Succès retour de redirection Google. UID Firebase:', result.user.uid, 'Email:', result.user.email);
+        return { user: result.user, accessToken: cachedAccessToken };
+      }
+      return null;
+    } catch (error: any) {
+      console.error('[GoogleAuth] Erreur lors du traitement getRedirectResult:', error?.code, error?.message);
+      setLastAuthError(error);
+      throw error;
+    }
+  })();
+
+  return redirectResultPromise;
 }
 
 /**
@@ -132,75 +160,74 @@ export const googleSignIn = async (options?: {
   const includeScopes = Boolean(options?.includeWorkspaceScopes);
   const provider = createGoogleProvider(includeScopes);
 
-  console.log('[GoogleAuth] Début connexion Google Sign-In (scopes workspace:', includeScopes, ')...');
+  setLastAuthError(null);
+  console.log('[GoogleAuth] Début connexion Google Sign-In (scopes workspace:', includeScopes, 'forceRedirect:', Boolean(options?.forceRedirect), ')...');
 
   // Détection environnement : iframe AI Studio vs PWA standalone mobile
   const isInIframe = typeof window !== 'undefined' && window.self !== window.top;
-  const isMobile = typeof navigator !== 'undefined' && /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-  const isStandalone = typeof window !== 'undefined' && (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    Boolean((window.navigator as any).standalone)
-  );
 
-  // Si l'utilisateur est dans une iframe (ex: preview AI Studio), signInWithRedirect est bloqué par SameOrigin,
-  // donc signInWithPopup est impératif.
-  const shouldTryPopupFirst = isInIframe || (!options?.forceRedirect && !isStandalone && !isMobile);
-
-  if (shouldTryPopupFirst) {
+  // Si redirection explicitement forcée et non dans un iframe
+  if (options?.forceRedirect && !isInIframe) {
     try {
-      console.log('[GoogleAuth] Tentative via signInWithPopup...');
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-
-      if (credential?.accessToken) {
-        cachedAccessToken = credential.accessToken;
-      }
-      cachedUser = result.user;
-
-      console.log(
-        '[GoogleAuth] Succès Google Sign-In via Popup. UID Firebase:',
-        result.user.uid,
-        'Email:',
-        result.user.email,
-        'Nom:',
-        result.user.displayName
-      );
-
-      // Si des scopes Google Sheets étaient spécifiquement demandés mais qu'aucun token n'est retourné
-      if (includeScopes && !cachedAccessToken) {
-        throw new Error('Jeton d\'accès Google Sheets non retourné par Google.');
-      }
-
-      return { user: result.user, accessToken: cachedAccessToken || '' };
-    } catch (popupError: any) {
-      console.warn('[GoogleAuth] signInWithPopup a échoué ou a été bloqué:', popupError?.code, popupError?.message);
-
-      // Si le popup a été bloqué et qu'on n'est pas dans un iframe, on tente le fallback par redirection
-      if ((popupError?.code === 'auth/popup-blocked' || popupError?.code === 'auth/cancelled-popup-request') && !isInIframe) {
-        console.log('[GoogleAuth] Basculement automatique sur signInWithRedirect...');
-        await signInWithRedirect(auth, provider);
-        // signInWithRedirect redirige la page entière, la promise ne résout pas immédiatement
-        return new Promise(() => {});
-      }
-
-      throw popupError;
-    }
-  } else {
-    // Environnement mobile standalone ou demande explicite de redirection
-    try {
-      console.log('[GoogleAuth] Lancement direct via signInWithRedirect (mobile/standalone)...');
+      console.log('[GoogleAuth] Lancement demandé par redirection (forceRedirect=true)...');
       await signInWithRedirect(auth, provider);
       return new Promise(() => {});
     } catch (redirectError: any) {
-      console.warn('[GoogleAuth] signInWithRedirect a échoué, essai de repli via popup:', redirectError);
-      const result = await signInWithPopup(auth, provider);
-      const credential = GoogleAuthProvider.credentialFromResult(result);
-      if (credential?.accessToken) {
-        cachedAccessToken = credential.accessToken;
-      }
-      cachedUser = result.user;
-      return { user: result.user, accessToken: cachedAccessToken || '' };
+      setLastAuthError(redirectError);
+      console.warn('[GoogleAuth] signInWithRedirect a échoué:', redirectError);
+      throw redirectError;
     }
+  }
+
+  // Par défaut sur TOUS les environnements (y compris GitHub Pages, Android et Windows PWA) :
+  // Tenter en premier lieu signInWithPopup.
+  // Raison critique : Sur GitHub Pages (domaine externe instantafrik-rgb.github.io différent de firebaseapp.com),
+  // signInWithPopup utilise window.postMessage et n'est pas bloqué par le partitionnement des cookies tiers,
+  // alors que signInWithRedirect perd régulièrement l'état de session OAuth sur les domaines tiers.
+  try {
+    console.log('[GoogleAuth] Tentative prioritaire via signInWithPopup (zéro perte de session)...');
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+
+    if (credential?.accessToken) {
+      cachedAccessToken = credential.accessToken;
+    }
+    cachedUser = result.user;
+    setLastAuthError(null);
+
+    console.log(
+      '[GoogleAuth] Succès Google Sign-In via Popup. UID Firebase:',
+      result.user.uid,
+      'Email:',
+      result.user.email,
+      'Nom:',
+      result.user.displayName
+    );
+
+    // Si des scopes Google Sheets étaient spécifiquement demandés mais qu'aucun token n'est retourné
+    if (includeScopes && !cachedAccessToken) {
+      throw new Error('Jeton d\'accès Google Sheets non retourné par Google.');
+    }
+
+    return { user: result.user, accessToken: cachedAccessToken || '' };
+  } catch (popupError: any) {
+    setLastAuthError(popupError);
+    console.warn('[GoogleAuth] signInWithPopup a échoué:', popupError?.code, popupError?.message);
+
+    // Si le popup est expressément bloqué par le navigateur et qu'on n'est pas dans un iframe,
+    // tenter le basculement automatique par redirection
+    if ((popupError?.code === 'auth/popup-blocked' || popupError?.code === 'auth/cancelled-popup-request') && !isInIframe) {
+      console.log('[GoogleAuth] Popup bloqué par le navigateur. Basculement sur signInWithRedirect...');
+      try {
+        await signInWithRedirect(auth, provider);
+        return new Promise(() => {});
+      } catch (redirectErr: any) {
+        setLastAuthError(redirectErr);
+        throw redirectErr;
+      }
+    }
+
+    throw popupError;
   }
 };
 

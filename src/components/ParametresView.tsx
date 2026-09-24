@@ -33,6 +33,7 @@ import {
   Moon,
   Sun,
   Laptop,
+  Activity,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { usePWAInstall } from '../hooks/usePWAInstall';
@@ -48,10 +49,11 @@ import {
 import { Devis, Commande } from '../types';
 import { GoogleSheetsView } from './GoogleSheetsView';
 import { CloudSyncView } from './CloudSyncView';
+import { ProductionDiagnosticPanel } from './ProductionDiagnosticPanel';
 import { APP_VERSION, BUILD_TIME } from '../pwaUpdate';
 
 interface ParametresViewProps {
-  initialTab?: 'sync' | 'apparence' | 'notifications' | 'apk' | 'entreprise' | 'securite' | 'backup' | 'gdrive' | 'sheets' | 'exports' | 'archives' | 'tests';
+  initialTab?: 'sync' | 'diagnostic' | 'apparence' | 'notifications' | 'apk' | 'entreprise' | 'securite' | 'backup' | 'gdrive' | 'sheets' | 'exports' | 'archives' | 'tests';
 }
 
 export const ParametresView: React.FC<ParametresViewProps> = ({ initialTab = 'sync' }) => {
@@ -103,7 +105,7 @@ export const ParametresView: React.FC<ParametresViewProps> = ({ initialTab = 'sy
   } = useApp();
 
   const [activeTab, setActiveTab] = useState<
-    'sync' | 'apparence' | 'notifications' | 'apk' | 'entreprise' | 'securite' | 'backup' | 'gdrive' | 'sheets' | 'exports' | 'archives' | 'tests'
+    'sync' | 'diagnostic' | 'apparence' | 'notifications' | 'apk' | 'entreprise' | 'securite' | 'backup' | 'gdrive' | 'sheets' | 'exports' | 'archives' | 'tests'
   >(initialTab);
 
   // Sync activeTab when initialTab prop changes (e.g. clicking Archives in top bar)
@@ -839,6 +841,7 @@ npx cap run android
       <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs no-scrollbar border-b border-neutral-200 dark:border-neutral-800">
         {[
           { id: 'sync', label: '1. Cloud NantorApp (Win ↔ Android)', icon: RefreshCw },
+          { id: 'diagnostic', label: 'Diagnostic Prod (GitHub vs Preview)', icon: Activity },
           { id: 'apparence', label: 'Apparence & Thèmes', icon: Palette },
           { id: 'notifications', label: 'Notifications V3', icon: Bell },
           { id: 'apk', label: 'Android (APK)', icon: Smartphone },
@@ -886,6 +889,9 @@ npx cap run android
 
       {/* TAB V4: CLOUD SYNC WINDOWS <-> ANDROID */}
       {activeTab === 'sync' && <CloudSyncView />}
+
+      {/* TAB DIAGNOSTIC PRODUCTION: GITHUB PAGES VS PREVIEW */}
+      {activeTab === 'diagnostic' && <ProductionDiagnosticPanel />}
 
       {/* TAB 0: ANDROID APK & USB DEBUGGING */}
       {activeTab === 'apk' && (

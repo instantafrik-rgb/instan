@@ -33,6 +33,7 @@ import {
   detectDeviceType,
   subscribeToUserCollections,
   mergeCollectionEntities,
+  testFirestoreConnection,
 } from '../utils/cloudSync';
 import {
   auth,
@@ -42,6 +43,8 @@ import {
   onAuthUserChanged,
   handleRedirectResult,
   formatAuthErrorMessage,
+  AuthErrorInfo,
+  getLastAuthError,
 } from '../utils/googleAuth';
 import type { User } from 'firebase/auth';
 import {
@@ -177,8 +180,10 @@ interface AppContextType {
   downloadAllFromCloud: () => Promise<{ success: boolean; message: string }>;
   clearOfflinePendingQueue: () => void;
   currentAuthUser: User | null;
+  lastAuthError: AuthErrorInfo | null;
   signInWithGoogle: (options?: { forceRedirect?: boolean }) => Promise<void>;
   signOutGoogle: () => Promise<void>;
+  testFirestore: () => Promise<{ success: boolean; message: string; code?: string; durationMs?: number }>;
 
   // Rentabilité
   saveRentabilite: (commandeId: string, prixAchatChine: number, fraisReels: number) => Rentabilite;
@@ -2204,6 +2209,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // ===================== V4 CLOUD SYNCHRONIZATION (Windows <-> Android) =====================
   const [currentAuthUser, setCurrentAuthUser] = useState<User | null>(getCurrentGoogleUser());
+  const [lastAuthError, setLastAuthError] = useState<AuthErrorInfo | null>(getLastAuthError());
   const [lastSyncError, setLastSyncError] = useState<string | null>(null);
   const [offlinePendingCount, setOfflinePendingCount] = useState<number>(() => getOfflineQueue().length);
   const [syncState, setSyncState] = useState<SyncState>(() => {
@@ -2233,6 +2239,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const unsubscribe = onAuthUserChanged((user) => {
       setCurrentAuthUser(user);
+      if (user) {
+        setLastAuthError(null);
+      }
     });
 
     return () => {
@@ -2260,10 +2269,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [syncState]);
 
-  // Real-time synchronization subscription for current user
+  // Real-time synchronization subscription and initial sync for current user
   useEffect(() => {
     if (!currentAuthUser?.uid) return;
     const userId = currentAuthUser.uid;
+
+    console.log(`[CloudSync] Initialisation de la synchronisation pour Firebase UID: ${userId}`);
+    // Exécuter la synchronisation initiale immédiate (flush file hors ligne + récupération + push miroir)
+    syncNow(userId).catch((err) => {
+      console.warn('[CloudSync] Avertissement synchronisation initiale:', err);
+    });
 
     const unsubscribe = subscribeToUserCollections(userId, (colName, items) => {
       if (colName === 'clients') {
@@ -2305,29 +2320,47 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const signInWithGoogle = async (options?: { forceRedirect?: boolean }) => {
     try {
+      setLastAuthError(null);
       const res = await googleSignIn(options);
       if (res?.user) {
         setCurrentAuthUser(res.user);
+        setLastAuthError(null);
         showToast(`Connecté avec Google : ${res.user.email || res.user.displayName || 'Compte Google'}`, 'success');
         // Synchroniser immédiatement les données de l'utilisateur
         await syncNow(res.user.uid);
       }
     } catch (err: any) {
+      const errInfo: AuthErrorInfo = {
+        code: err?.code || 'unknown',
+        message: err?.message || 'Erreur inconnue',
+        timestamp: new Date().toISOString(),
+        domain: typeof window !== 'undefined' ? window.location.hostname : '',
+        origin: typeof window !== 'undefined' ? window.location.origin : '',
+      };
+      setLastAuthError(errInfo);
+
       if (err?.code === 'auth/popup-closed-by-user') {
         console.info('[GoogleAuth] Fenêtre fermée par l\'utilisateur avant sélection du compte.');
         showToast('Connexion interrompue : fenêtre Google fermée avant sélection du compte.', 'info');
         return;
       }
       const friendlyMessage = formatAuthErrorMessage(err);
-      console.error('[GoogleAuth] Échec connexion Google:', err);
-      showToast(`Échec de connexion Google : ${friendlyMessage}`, 'error');
+      console.error('[GoogleAuth] Échec connexion Google:', err?.code, err?.message, err);
+      // Inclure le code d'erreur réel pour le diagnostic sans masquer
+      const displayMsg = err?.code ? `[${err.code}] ${friendlyMessage}` : friendlyMessage;
+      showToast(`Échec de connexion Google : ${displayMsg}`, 'error');
     }
+  };
+
+  const testFirestore = async () => {
+    return await testFirestoreConnection(currentAuthUser?.uid);
   };
 
   const signOutGoogle = async () => {
     try {
       await googleLogout();
       setCurrentAuthUser(null);
+      setLastAuthError(null);
       showToast('Déconnecté de Google.', 'info');
     } catch (err: any) {
       showToast(`Erreur déconnexion : ${err?.message || 'Erreur'}`, 'error');
@@ -2740,8 +2773,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         downloadAllFromCloud,
         clearOfflinePendingQueue,
         currentAuthUser,
+        lastAuthError,
         signInWithGoogle,
         signOutGoogle,
+        testFirestore,
 
         // Rentabilité
         saveRentabilite,
